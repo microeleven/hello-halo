@@ -14,7 +14,6 @@ tsc --noEmit passes. Core architecture (types, LLM providers, tools, query loop,
 
 ### What's Missing / Stub
 - **orchestrator/** — empty directory. No Worker Thread sub-agent support.
-- **tools/mcp/** — external MCP client/transport (stdio, sse, http) not implemented.
 - **WebSearchTool** — stub, returns placeholder message.
 - **AgentTool** — stub when no spawner registered (orchestrator dependency).
 - **TeamCreateTool** — stub when no agent runner registered.
@@ -38,9 +37,38 @@ tsc --noEmit passes. Core architecture (types, LLM providers, tools, query loop,
 - **McpSdkServerConfigWithInstance** — type added to McpServerConfig union.
 - **Zod→JSON Schema conversion** — for MCP tool input schemas (Zod 3/4 compatible).
 
+### What Works (added Run 3)
+- **External MCP transport** — stdio, SSE, and streamable-http transports fully implemented.
+- **McpClient** — JSON-RPC 2.0 client with initialize handshake, tool discovery, and tool invocation.
+- **connectExternalMcpServers()** — async connect, handshake, tool bridge for all external configs.
+- **Session/query lifecycle** — external MCP servers auto-connected at startup, disconnected on close.
+- **Graceful degradation** — individual server failures are logged and skipped, don't block others.
+
 ---
 
 ## Changelog
+
+### 2026-04-08 — Run 3: External MCP transport (P0 compatibility)
+
+**Implemented stdio, SSE, and streamable-http MCP transports — the largest gap for drop-in replacement**
+
+Consumer code (hello-halo) passes database-sourced MCP servers with stdio/sse/http transport types. Without external MCP support, those tools were invisible to the query loop. This run closes that gap.
+
+**New files:**
+- `tools/mcp/jsonrpc.ts` — JSON-RPC 2.0 types and `McpTransport` interface
+- `tools/mcp/transports.ts` — `StdioTransport` (child process, newline-delimited JSON), `SSETransport` (Server-Sent Events with endpoint discovery), `HttpTransport` (Streamable HTTP with SSE response parsing)
+- `tools/mcp/client.ts` — `McpClient` class: MCP handshake (protocol version 2024-11-05), tool discovery (`tools/list`), tool invocation (`tools/call`)
+
+**Changes:**
+- `tools/mcp/bridge.ts` — added `connectExternalMcpServers()` and `createExternalBridgedTool()`. SDK and external tools now share a common `formatCallToolResult()` helper. Exports `ExternalMcpConnection` type.
+- `core/session.ts` — `createSession()` now connects external MCP servers during init and disconnects them on `close()`
+- `index.ts` — `query()` now wraps its generator to connect external MCP servers before the loop and disconnect in `finally`
+
+**Transport details:**
+- **Stdio**: Spawns child process, communicates via stdin/stdout, handles process exit/error/SIGTERM+SIGKILL grace period
+- **SSE**: Connects to SSE URL, waits for `endpoint` event, POSTs JSON-RPC to endpoint, receives responses via SSE stream
+- **HTTP**: Stateless POST to URL, handles both plain JSON and SSE-streamed responses
+- All transports: 30s request timeout, proper pending request cleanup, graceful degradation on failure
 
 ### 2026-04-08 — Run 2: tool() + createSdkMcpServer() (P0 compatibility)
 

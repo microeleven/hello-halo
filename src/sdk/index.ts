@@ -41,7 +41,7 @@ import { queryLoop } from './core/query-loop.js';
 import type { SDKMessage } from './core/query-loop.js';
 import { resolveQueryConfig } from './core/context.js';
 import { getAllTools, filterTools } from './tools/registry.js';
-import { extractSdkMcpTools } from './tools/mcp/bridge.js';
+import { extractSdkMcpTools, connectExternalMcpServers } from './tools/mcp/bridge.js';
 
 /**
  * The Query object — an AsyncGenerator<SDKMessage> with additional
@@ -127,22 +127,43 @@ export function query(params: {
     disallowedTools: config.disallowedTools,
   });
 
-  // If prompt is a string, start the query loop directly
-  if (typeof prompt === 'string') {
-    const gen = queryLoop(configWithSignal, provider, tools, prompt);
-    return wrapGeneratorAsQuery(gen, abortController);
-  }
+  // Wrap in an async generator that connects external MCP servers first,
+  // then runs the query loop, and disconnects on cleanup.
+  const mcpServersConfig = options.mcpServers as Record<string, unknown> | undefined;
 
-  // If prompt is an AsyncIterable, handle streaming input
-  // For the initial implementation, we drain the first message to start the loop.
   const gen = (async function* (): AsyncGenerator<SDKMessage, void, undefined> {
-    let firstPrompt = '';
-    for await (const msg of prompt) {
-      firstPrompt = typeof msg.content === 'string' ? msg.content : String(msg.content);
-      break; // Take the first message to start the loop
+    // Connect external MCP servers (stdio/sse/http) asynchronously
+    let disconnectMcp: (() => void) | null = null;
+    try {
+      const externalMcp = await connectExternalMcpServers(mcpServersConfig);
+      disconnectMcp = externalMcp.disconnect;
+      if (externalMcp.tools.length > 0) {
+        const extToolNames = new Set(externalMcp.tools.map((t) => t.name));
+        tools = tools.filter((t) => !extToolNames.has(t.name));
+        tools.push(...externalMcp.tools);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[SDK] External MCP connection error: ${msg}`);
     }
-    if (!firstPrompt) return;
-    yield* queryLoop(configWithSignal, provider, tools, firstPrompt);
+
+    try {
+      if (typeof prompt === 'string') {
+        yield* queryLoop(configWithSignal, provider, tools, prompt);
+      } else {
+        // AsyncIterable prompt — drain the first message to start the loop
+        let firstPrompt = '';
+        for await (const msg of prompt) {
+          firstPrompt = typeof msg.content === 'string' ? msg.content : String(msg.content);
+          break;
+        }
+        if (!firstPrompt) return;
+        yield* queryLoop(configWithSignal, provider, tools, firstPrompt);
+      }
+    } finally {
+      // Disconnect external MCP servers on completion or error
+      disconnectMcp?.();
+    }
   })();
 
   return wrapGeneratorAsQuery(gen, abortController);
@@ -302,7 +323,35 @@ export type {
   AnyZodRawShape,
   InferShape,
 } from './tools/mcp/sdk-server.js';
-export { bridgeSdkMcpTools, extractSdkMcpTools, isSdkMcpServerConfig } from './tools/mcp/bridge.js';
+export {
+  bridgeSdkMcpTools,
+  extractSdkMcpTools,
+  isSdkMcpServerConfig,
+  connectExternalMcpServers,
+} from './tools/mcp/bridge.js';
+export type { ExternalMcpConnection } from './tools/mcp/bridge.js';
+
+// MCP external transport — client, transports, JSON-RPC
+export { McpClient } from './tools/mcp/client.js';
+export type {
+  McpServerCapabilities,
+  McpServerInfo,
+  McpToolDefinition,
+  McpCallToolResult,
+} from './tools/mcp/client.js';
+export { StdioTransport, SSETransport, HttpTransport } from './tools/mcp/transports.js';
+export type {
+  StdioTransportOptions,
+  SSETransportOptions,
+  HttpTransportOptions,
+} from './tools/mcp/transports.js';
+export type {
+  McpTransport,
+  JsonRpcRequest,
+  JsonRpcNotification,
+  JsonRpcResponse,
+  JsonRpcError,
+} from './tools/mcp/jsonrpc.js';
 
 // ---------------------------------------------------------------------------
 // Prompt
