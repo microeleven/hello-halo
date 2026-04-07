@@ -36,6 +36,7 @@ import {
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { createCanUseTool } from '../../services/agent/permission-handler'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { processStream } from '../../services/agent/stream-processor'
@@ -256,6 +257,17 @@ export async function sendAppChatMessage(
 
   // Override for app chat context
   sdkOptions.systemPrompt = systemPrompt
+
+  // Non-native sessions (IM channels, etc.) are non-interactive — the user
+  // cannot respond to interactive tool prompts, so deny them preemptively
+  const defaultConvId = getAppChatConversationId(appId)
+  if (conversationId !== defaultConvId) {
+    sdkOptions.canUseTool = createCanUseTool({
+      spaceId,
+      conversationId,
+      nonInteractive: true,
+    })
+  }
 
   // ── Resolve space path and run ID early (needed for both session resume and JSONL) ──
   const spacePath = getSpace(spaceId)?.path ?? ''

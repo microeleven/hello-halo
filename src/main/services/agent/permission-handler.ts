@@ -29,6 +29,14 @@ type CanUseToolFn = (
 interface CanUseToolDeps {
   spaceId: string
   conversationId: string
+  /**
+   * Non-interactive mode: tools that require real-time user interaction
+   * (e.g. AskUserQuestion) are immediately denied.
+   *
+   * Use this for any session where the user cannot respond to interactive
+   * prompts — IM channels, scheduled runs, headless API calls, etc.
+   */
+  nonInteractive?: boolean
 }
 
 // ============================================
@@ -113,6 +121,12 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
     if (!deps) {
       console.warn('[PermissionHandler] AskUserQuestion called without deps, auto-allowing')
       return { behavior: 'allow' as const, updatedInput: { ...input, answers: {} } }
+    }
+
+    // Non-interactive sessions cannot respond to interactive tools — deny immediately
+    if (deps.nonInteractive) {
+      console.log(`[PermissionHandler] AskUserQuestion denied: non-interactive session (conversationId=${deps.conversationId})`)
+      return { behavior: 'deny' as const, updatedInput: input }
     }
 
     const { spaceId, conversationId } = deps
