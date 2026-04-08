@@ -512,7 +512,17 @@ export async function getOrCreateV2Session(
   }
   // Requires SDK patch: native SDK ignores most sdkOptions parameters
   // Use 'as any' to bypass type check, actual params handled by patched SDK
-  const session = (await unstable_v2_createSession(sdkOptions as any)) as unknown as V2SDKSession
+  const useHaloSdk = getConfig().agent?.sdkEngine === 'halo'
+  let session: V2SDKSession
+  if (useHaloSdk) {
+    // Dynamic import — SDK is only loaded when the user explicitly enables it.
+    // Keeps it out of the main process startup bundle entirely.
+    const { createSession: haloCreateSession } = await import('@hello-halo/agent-sdk')
+    session = (await haloCreateSession(sdkOptions as any)) as unknown as V2SDKSession
+    console.log(`[Agent][${conversationId}] Using Halo SDK (experimental)`)
+  } else {
+    session = (await unstable_v2_createSession(sdkOptions as any)) as unknown as V2SDKSession
+  }
 
   // Log PID for health system verification (via SDK patch)
   const pid = (session as any).pid
