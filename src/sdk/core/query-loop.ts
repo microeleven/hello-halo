@@ -833,6 +833,9 @@ export async function* queryLoop(
     const toolCtx = buildToolContext(config, sessionId, costTracker, turn);
     const pendingToolProgress: SDKMessage[] = [];
 
+    // Per-tool sub-agent message buffers (Agent tool forwards child messages here)
+    const subAgentMsgBuffers = new Map<string, SDKMessage[]>();
+
     /** Build a tool_progress message with required uuid/session_id fields. */
     function toolProgress(
       toolName: string,
@@ -855,6 +858,15 @@ export async function* queryLoop(
     const toolResultPromises = toolUseBlocks.map(async (toolUse) => {
       const tool = findTool(tools, toolUse.name);
       toolStartTimes.set(toolUse.id, Date.now());
+
+      // Build per-call context with toolUseId + sub-agent message forwarding
+      const subAgentMsgs: SDKMessage[] = [];
+      subAgentMsgBuffers.set(toolUse.id, subAgentMsgs);
+      const perCallCtx: ToolContext = {
+        ...toolCtx,
+        toolUseId: toolUse.id,
+        onSubAgentMessage: (msg) => subAgentMsgs.push(msg as SDKMessage),
+      };
 
       // Emit tool_progress: running
       const runningMsg = toolProgress(toolUse.name, toolUse.id);
@@ -921,7 +933,7 @@ export async function* queryLoop(
         }
       }
 
-      const result = await executeTool(tool, toolUse.input, toolCtx, config.toolResultBudget);
+      const result = await executeTool(tool, toolUse.input, perCallCtx, config.toolResultBudget);
 
       // --- PostToolUse / PostToolUseFailure hooks ---
       if (result.isError) {
@@ -971,6 +983,18 @@ export async function* queryLoop(
     // Yield all collected tool_progress messages from the generator
     for (const progressMsg of pendingToolProgress) {
       yield progressMsg;
+    }
+
+    // Yield sub-agent messages forwarded by Agent tool (task lifecycle + child messages).
+    // Emitted in tool-call order to ensure task_started precedes child messages.
+    for (const toolUse of toolUseBlocks) {
+      const subMsgs = subAgentMsgBuffers.get(toolUse.id);
+      if (subMsgs) {
+        for (const subMsg of subMsgs) {
+          yield subMsg;
+          options?.onProgress?.(subMsg);
+        }
+      }
     }
 
     // Build tool result message and add to conversation

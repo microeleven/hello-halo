@@ -82,6 +82,26 @@ Branch: `feature/sdk`
   - Model `display_name` used for human-readable name
 - tsc --noEmit passes
 
+### Run 12 — Sub-Agent Message Forwarding + Task Lifecycle Events
+- **`ToolContext.toolUseId` + `ToolContext.onSubAgentMessage`** (new fields in `types/tool.ts`):
+  - `toolUseId?: string` — the parent Agent tool_use_id passed into each tool invocation
+  - `onSubAgentMessage?: (msg: Record<string, unknown>) => void` — callback for streaming child messages
+  - Uses `Record<string,unknown>` to avoid circular import between `types/tool.ts` and `core/query-loop.ts`
+- **Query loop sub-agent message forwarding** (`core/query-loop.ts`):
+  - Creates per-tool-call ToolContext extending the shared context with `toolUseId` and `onSubAgentMessage`
+  - Buffers messages from AgentTool execution in a per-call `subAgentMsgs[]`
+  - After all tool calls complete, yields buffered sub-agent messages in tool-call order before the tool result
+  - Only foreground agents (not background) have their messages forwarded (background returns immediately)
+- **Spawner task lifecycle events** (`orchestrator/spawner.ts`):
+  - `runSubAgent()` now accepts `parentToolUseId`, `onMessage`, `parentSessionId` parameters
+  - Emits `system/task_started` before the sub-agent loop starts (with `tool_use_id` for consumer routing)
+  - Forwards each `assistant`/`user` sub-agent message to parent stream with `parent_tool_use_id` tagged
+  - Tracks `toolUseCount` and `lastToolName` from assistant message content blocks
+  - Emits `system/task_progress` after each completed turn (when `user` tool-result message arrives)
+  - Emits `system/task_notification` at completion (status: completed/stopped, with usage + summary)
+- Consumer compatibility: stream-processor.ts `handleTaskStarted/Progress/Notification` + sub-agent timeline now work with our SDK
+- tsc --noEmit passes
+
 ---
 
 ## Priority Queue (Next Runs)
@@ -93,7 +113,6 @@ Branch: `feature/sdk`
 ### P2 (Important)
 - [ ] WebSearchTool real implementation
 - [ ] Agent progress summaries (agentProgressSummaries fork+summarize every 30s)
-- [ ] SDKMessage task_started/task_progress/task_notification subtypes for sub-agent lifecycle
 
 ### P3 (Nice to have)
 - [ ] GlobTool hidden directory handling

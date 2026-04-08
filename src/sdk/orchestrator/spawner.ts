@@ -99,12 +99,16 @@ function buildSubAgentPrompt(request: AgentSpawnRequest, agentDef?: AgentDefinit
 // ---------------------------------------------------------------------------
 
 async function runSubAgent(
+  agentId: string,
   request: AgentSpawnRequest,
   parentConfig: QueryConfig,
   provider: LlmProvider,
   parentTools: Tool[],
   agentAbortSignal: AbortSignal,
   parentAgents?: Record<string, AgentDefinition>,
+  parentToolUseId?: string,
+  onMessage?: (msg: Record<string, unknown>) => void,
+  parentSessionId?: string,
 ): Promise<{ text: string; messages: SDKMessage[]; costUsd: number; turns: number }> {
   const model = resolveModel(request.model, parentConfig.model);
   const tools = buildSubAgentTools(parentTools, request);
@@ -137,9 +141,27 @@ async function runSubAgent(
   const subConfig = resolveQueryConfig(subOptions);
   const configWithSignal = { ...subConfig, abortSignal: subAbort.signal };
 
+  // Session ID used for emitted messages — use parent session ID for proper routing
+  const sessionIdForMessages = parentSessionId ?? '';
+
+  // Emit task_started — signals the consumer to initialize task progress UI
+  if (onMessage && parentToolUseId) {
+    onMessage({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: agentId,
+      tool_use_id: parentToolUseId,
+      session_id: sessionIdForMessages,
+      uuid: randomUUID(),
+    });
+  }
+
   const collected: SDKMessage[] = [];
   let costUsd = 0;
   let turns = 0;
+  let toolUseCount = 0;
+  let lastToolName: string | undefined;
+  const startedAt = Date.now();
 
   try {
     const gen = queryLoop(configWithSignal, provider, tools, request.prompt);
@@ -151,9 +173,69 @@ async function runSubAgent(
         costUsd = msg.total_cost_usd;
         turns = msg.num_turns;
       }
+
+      // Forward assistant/user messages to parent stream with parent_tool_use_id tagged.
+      // This lets the consumer render a real-time sub-agent timeline.
+      if (onMessage && (msg.type === 'assistant' || msg.type === 'user')) {
+        const tagged: Record<string, unknown> = {
+          ...(msg as unknown as Record<string, unknown>),
+          parent_tool_use_id: parentToolUseId ?? null,
+          uuid: randomUUID(), // fresh uuid so parent stream deduplicates correctly
+        };
+        onMessage(tagged);
+
+        // Track tool_use blocks from assistant messages for task_progress stats
+        if (msg.type === 'assistant') {
+          const content = msg.message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content as unknown as Array<Record<string, unknown>>) {
+              if (block.type === 'tool_use') {
+                toolUseCount++;
+                if (typeof block.name === 'string') lastToolName = block.name;
+              }
+            }
+          }
+        }
+
+        // Emit task_progress after each completed turn (user message = tool results returned)
+        if (msg.type === 'user') {
+          onMessage({
+            type: 'system',
+            subtype: 'task_progress',
+            task_id: agentId,
+            session_id: sessionIdForMessages,
+            uuid: randomUUID(),
+            last_tool_name: lastToolName,
+            usage: {
+              total_tokens: 0, // sub-agent token counts tracked separately via CostTracker
+              tool_uses: toolUseCount,
+              duration_ms: Date.now() - startedAt,
+            },
+          });
+        }
+      }
     }
   } finally {
     agentAbortSignal.removeEventListener('abort', onParentAbort);
+  }
+
+  // Emit task_notification — signals the consumer that the agent has finished
+  if (onMessage) {
+    const completionStatus = agentAbortSignal.aborted ? 'stopped' : 'completed';
+    onMessage({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: agentId,
+      status: completionStatus,
+      session_id: sessionIdForMessages,
+      uuid: randomUUID(),
+      usage: {
+        total_tokens: 0,
+        tool_uses: toolUseCount,
+        duration_ms: Date.now() - startedAt,
+      },
+      summary: extractFinalText(collected),
+    });
   }
 
   const text = extractFinalText(collected);
@@ -212,15 +294,24 @@ export function createSpawner(deps: SpawnerDeps) {
       }, { once: true });
     }
 
+    // Sub-agent message forwarding: only for foreground agents (background returns immediately,
+    // so the message buffer is already drained before the sub-agent runs).
+    const onMessage = request.runInBackground ? undefined : ctx.onSubAgentMessage;
+    const parentToolUseId = request.runInBackground ? undefined : ctx.toolUseId;
+
     const runAgent = async () => {
       try {
         const result = await runSubAgent(
+          agentId,
           request,
           parentConfig,
           provider,
           parentTools,
           agentAbortController.signal,
           parentConfig.agents,
+          parentToolUseId,
+          onMessage,
+          ctx.sessionId,
         );
 
         const entry = registry.get(agentId);

@@ -87,6 +87,18 @@ export interface ToolContext {
   additionalDirectories?: string[];
   /** Callback for recording file changes (for undo/rewind) */
   recordFileChange?: (path: string, beforeContent: Buffer, afterContent: Buffer) => void;
+  /**
+   * The tool_use ID for this specific invocation.
+   * Set by the query loop so the AgentTool can associate messages
+   * with the correct parent tool_use block.
+   */
+  toolUseId?: string;
+  /**
+   * Callback to forward sub-agent SDKMessages to the parent stream.
+   * Called by AgentTool/spawner with messages tagged by parent_tool_use_id.
+   * Uses Record<string,unknown> to avoid circular import with query-loop.
+   */
+  onSubAgentMessage?: (msg: Record<string, unknown>) => void;
 }
 
 // ---------------------------------------------------------------------------
