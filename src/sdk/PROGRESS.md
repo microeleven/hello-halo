@@ -77,9 +77,29 @@ tsc --noEmit passes. Core architecture (types, LLM providers, tools, query loop,
 - **Connect / disconnect / restart control plane** — `connectAll()`, `connect(name)`, `disconnect(name)`, `disconnectAll()`, `restart(name)` methods for full lifecycle control.
 - **Session + query integration** — Both `createSession()` and `query()` now use `McpConnectionManager` instead of `connectExternalMcpServers()`. Reconnect timers are properly canceled on session close.
 
+### What Works (added Run 9)
+- **Consumer-compatible session internals** — Session objects now expose `pid`, `query`, `query.transport`, `query.supportedCommands()`, and `abortController` via property access. Consumer code (hello-halo session-manager.ts) accesses these via `(session as any).xxx` for health monitoring, process exit detection, slash command discovery, and session rebuild. In-process SDK provides appropriate shims: `pid` returns `process.pid`, `transport.isReady()` reflects `!closed`, `transport.onExit()` fires on `close()`, `supportedCommands()` returns configured slash commands.
+- **SDKMessage type fixes for CC SDK compatibility:**
+  - `slash_commands` changed from `Array<{name,description}>` to `string[]` (matching CC SDK wire format)
+  - All message variants now include `uuid` field (init, compact_boundary, tool_progress, status, api_retry)
+  - `tool_progress` messages now include `session_id` field
+  - `compact_boundary` messages now include `compact_metadata` object (`{trigger, pre_tokens, preserved_segment?}`)
+- **Options type extensions** — Added `slashCommands`, `skills`, `pathToClaudeCodeExecutable`, `executable`, `executableArgs`, `extraArgs` fields to `Options` interface. CC SDK compat fields (pathToClaudeCodeExecutable etc.) are accepted but ignored by the in-process SDK, preventing TypeScript errors when consumers pass them.
+
 ---
 
 ## Changelog
+
+### 2026-04-08 — Run 9: Consumer-compatible session internals + SDKMessage fixes
+
+**Exposed consumer-required internal session properties and fixed SDKMessage wire-format incompatibilities**
+
+The consumer (hello-halo) accesses SDK session internals via `(session as any).xxx` for health monitoring (`pid`, `query.transport.isReady()`), process exit detection (`query.transport.onExit()`), slash command discovery (`query.supportedCommands()`), and session rebuild (`abortController.abort()`). Without these, the SDK cannot be used as a drop-in replacement.
+
+**Changes:**
+- `core/session.ts` — Refactored `createSessionProxy()` to use `Object.defineProperty` for both public SDKSession interface and internal compatibility properties. New `createTransportShim()` provides `isReady()`, `ready`, and `onExit()` matching CC SDK's `ProcessTransport`. New `createQueryProxy()` provides `transport` and `supportedCommands()`. Session `close()` now fires exit listeners. Added `slashCommands` and `exitListeners` to `SessionState`.
+- `core/query-loop.ts` — Fixed `SDKMessage` type: `slash_commands` changed to `string[]`, added `uuid` to init/compact_boundary/tool_progress/status/api_retry variants, added `session_id` to tool_progress, added `compact_metadata` to compact_boundary. Extracted `toolProgress()` helper for consistent tool_progress message construction. `QueryLoopOptions.slashCommands` changed to `string[]`.
+- `types/config.ts` — Added `slashCommands`, `skills`, `pathToClaudeCodeExecutable`, `executable`, `executableArgs`, `extraArgs` to `Options` interface for CC SDK compat.
 
 ### 2026-04-08 — Run 8: MCP Connection Manager with reconnection
 

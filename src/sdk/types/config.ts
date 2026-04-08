@@ -300,6 +300,18 @@ export interface Options {
   customTools?: Tool[];
   /** Maximum characters per tool result before truncation */
   toolResultBudget?: number;
+  /** Slash commands available in this session (names or full objects). */
+  slashCommands?: Array<string | SlashCommand>;
+  /** Skill names available in this session. */
+  skills?: string[];
+  /** Path to Claude Code executable (CC SDK compat — ignored in-process). */
+  pathToClaudeCodeExecutable?: string;
+  /** JavaScript runtime (CC SDK compat — ignored in-process). */
+  executable?: string;
+  /** Additional runtime arguments (CC SDK compat — ignored in-process). */
+  executableArgs?: string[];
+  /** Additional CLI arguments (CC SDK compat — ignored in-process). */
+  extraArgs?: Record<string, string | null>;
 }
 
 // ---------------------------------------------------------------------------

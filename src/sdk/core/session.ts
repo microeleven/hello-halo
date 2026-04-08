@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Message, LlmProvider } from '../types/provider.js';
 import type { Tool } from '../types/tool.js';
-import type { Options, QueryConfig, PermissionMode } from '../types/config.js';
+import type { Options, QueryConfig, PermissionMode, SlashCommand } from '../types/config.js';
 import { resolveQueryConfig } from './context.js';
 import { queryLoop } from './query-loop.js';
 import type { SDKMessage, QueryLoopOptions } from './query-loop.js';
@@ -87,6 +87,10 @@ interface SessionState {
   mcpServerStatuses: McpServerConnectionStatus[];
   /** Orchestrator handle (for sub-agent lifecycle). */
   orchestrator: OrchestratorHandle | null;
+  /** Slash commands for supportedCommands() (from config). */
+  slashCommands: SlashCommand[];
+  /** Exit listeners for the transport shim. */
+  exitListeners: Set<(error: Error | undefined) => void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +187,18 @@ export async function createSession(options: Options): Promise<SDKSession> {
     tools,
   });
 
+  // Build slash commands from options (if provided)
+  const slashCommands: SlashCommand[] = [];
+  if (options.slashCommands) {
+    for (const cmd of options.slashCommands) {
+      if (typeof cmd === 'string') {
+        slashCommands.push({ name: cmd, description: '' });
+      } else if (cmd && typeof cmd === 'object' && 'name' in cmd) {
+        slashCommands.push(cmd as SlashCommand);
+      }
+    }
+  }
+
   const state: SessionState = {
     sessionId,
     config: configWithSignal,
@@ -196,6 +212,8 @@ export async function createSession(options: Options): Promise<SDKSession> {
     mcpManager,
     mcpServerStatuses,
     orchestrator,
+    slashCommands,
+    exitListeners: new Set(),
   };
 
   return createSessionProxy(state);
@@ -205,22 +223,101 @@ export async function createSession(options: Options): Promise<SDKSession> {
 // Session proxy implementation
 // ---------------------------------------------------------------------------
 
-function createSessionProxy(state: SessionState): SDKSession {
+/**
+ * Create an in-process transport shim.
+ *
+ * The CC SDK's process-based transport exposes `isReady()`, `.ready`,
+ * and `onExit()`. For the in-process SDK these are trivial stubs because
+ * there is no subprocess to monitor. The consumer (hello-halo) accesses
+ * these via `(session as any).query.transport`.
+ */
+function createTransportShim(state: SessionState) {
   return {
-    get sessionId(): string {
-      return state.sessionId;
+    /** Always true — no subprocess; the query loop is in-process. */
+    isReady(): boolean {
+      return !state.closed;
     },
-
-    async send(message: string | { role: 'user'; content: string }): Promise<void> {
-      if (state.closed) {
-        throw new Error('Session is closed');
-      }
-
-      const text = typeof message === 'string' ? message : message.content;
-      state.pendingMessages.push(text);
+    /** Always true — no subprocess. */
+    get ready(): boolean {
+      return !state.closed;
     },
+    /**
+     * Register a callback for "process exit". In the in-process SDK, this
+     * fires when the session is closed. Returns an unsubscribe function.
+     */
+    onExit(callback: (error: Error | undefined) => void): () => void {
+      state.exitListeners.add(callback);
+      return () => {
+        state.exitListeners.delete(callback);
+      };
+    },
+  };
+}
 
-    async *stream(): AsyncGenerator<SDKMessage, void, undefined> {
+/**
+ * Create a query proxy that mirrors the CC SDK's internal Query object.
+ *
+ * The consumer accesses `(session as any).query.transport` and
+ * `(session as any).query.supportedCommands()`.
+ */
+function createQueryProxy(state: SessionState) {
+  const transport = createTransportShim(state);
+  return {
+    transport,
+    /** Return slash commands registered in this session. */
+    async supportedCommands(): Promise<SlashCommand[]> {
+      return state.slashCommands;
+    },
+  };
+}
+
+function createSessionProxy(state: SessionState): SDKSession {
+  const queryProxy = createQueryProxy(state);
+
+  // Build the session object with both public interface and internal properties
+  // that the consumer accesses via `(session as any).xxx`.
+  const session: Record<string, unknown> = {};
+
+  // --- Internal properties (accessed via `as any` by consumer) ---
+
+  // `(session as any).pid` — consumer uses for health monitoring.
+  // In-process SDK has no subprocess; expose current process PID.
+  Object.defineProperty(session, 'pid', {
+    get: () => process.pid,
+    enumerable: false,
+  });
+
+  // `(session as any).query` — consumer uses for transport + supportedCommands.
+  Object.defineProperty(session, 'query', {
+    get: () => queryProxy,
+    enumerable: false,
+  });
+
+  // `(session as any).abortController` — consumer uses for session rebuild abort.
+  Object.defineProperty(session, 'abortController', {
+    get: () => state.abortController,
+    enumerable: false,
+  });
+
+  // --- Public SDKSession interface ---
+
+  Object.defineProperty(session, 'sessionId', {
+    get: () => state.sessionId,
+    enumerable: true,
+  });
+
+  session.send = async function send(
+    message: string | { role: 'user'; content: string },
+  ): Promise<void> {
+    if (state.closed) {
+      throw new Error('Session is closed');
+    }
+
+    const text = typeof message === 'string' ? message : message.content;
+    state.pendingMessages.push(text);
+  };
+
+  session.stream = async function* stream(): AsyncGenerator<SDKMessage, void, undefined> {
       if (state.closed) {
         throw new Error('Session is closed');
       }
@@ -298,58 +395,74 @@ function createSessionProxy(state: SessionState): SDKSession {
 
         yield msg;
       }
-    },
-
-    close(): void {
-      if (!state.closed) {
-        state.closed = true;
-        state.abortController.abort();
-
-        // Dispose orchestrator (abort sub-agents, reset stubs)
-        if (state.orchestrator) {
-          state.orchestrator.dispose();
-          state.orchestrator = null;
-        }
-
-        // Disconnect all external MCP servers (cancels reconnect loops)
-        if (state.mcpManager) {
-          state.mcpManager.disconnectAll();
-          state.mcpManager = null;
-        }
-      }
-    },
-
-    async interrupt(): Promise<void> {
-      state.abortController.abort();
-      // Create a new abort controller for subsequent interactions
-      state.abortController = new AbortController();
-      state.config = { ...state.config, abortSignal: state.abortController.signal };
-    },
-
-    async setModel(model: string | undefined): Promise<void> {
-      if (model) {
-        state.config = { ...state.config, model };
-      }
-    },
-
-    async setMaxThinkingTokens(maxThinkingTokens: number | null): Promise<void> {
-      if (maxThinkingTokens === null) {
-        state.config = { ...state.config, thinking: { type: 'disabled' } };
-      } else {
-        state.config = {
-          ...state.config,
-          thinking: { type: 'enabled', budgetTokens: maxThinkingTokens },
-        };
-      }
-    },
-
-    async setPermissionMode(_mode: PermissionMode): Promise<void> {
-      // Permission mode is handled by the canUseTool callback.
-      // The SDK preserves the callback interface.
-    },
-
-    async [Symbol.asyncDispose](): Promise<void> {
-      this.close();
-    },
   };
+
+  session.close = function close(): void {
+    if (!state.closed) {
+      state.closed = true;
+      state.abortController.abort();
+
+      // Notify exit listeners (transport shim)
+      for (const listener of state.exitListeners) {
+        try {
+          listener(undefined);
+        } catch { /* advisory */ }
+      }
+      state.exitListeners.clear();
+
+      // Dispose orchestrator (abort sub-agents, reset stubs)
+      if (state.orchestrator) {
+        state.orchestrator.dispose();
+        state.orchestrator = null;
+      }
+
+      // Disconnect all external MCP servers (cancels reconnect loops)
+      if (state.mcpManager) {
+        state.mcpManager.disconnectAll();
+        state.mcpManager = null;
+      }
+    }
+  };
+
+  session.interrupt = async function interrupt(): Promise<void> {
+    state.abortController.abort();
+    // Create a new abort controller for subsequent interactions
+    state.abortController = new AbortController();
+    state.config = { ...state.config, abortSignal: state.abortController.signal };
+  };
+
+  session.setModel = async function setModel(model: string | undefined): Promise<void> {
+    if (model) {
+      state.config = { ...state.config, model };
+    }
+  };
+
+  session.setMaxThinkingTokens = async function setMaxThinkingTokens(
+    maxThinkingTokens: number | null,
+  ): Promise<void> {
+    if (maxThinkingTokens === null) {
+      state.config = { ...state.config, thinking: { type: 'disabled' } };
+    } else {
+      state.config = {
+        ...state.config,
+        thinking: { type: 'enabled', budgetTokens: maxThinkingTokens },
+      };
+    }
+  };
+
+  session.setPermissionMode = async function setPermissionMode(
+    _mode: PermissionMode,
+  ): Promise<void> {
+    // Permission mode is handled by the canUseTool callback.
+    // The SDK preserves the callback interface.
+  };
+
+  Object.defineProperty(session, Symbol.asyncDispose, {
+    value: async function dispose(): Promise<void> {
+      (session as unknown as SDKSession).close();
+    },
+    enumerable: false,
+  });
+
+  return session as unknown as SDKSession;
 }

@@ -134,9 +134,10 @@ export type SDKMessage =
       mcp_servers?: Array<{ name: string; status: string }>;
       cwd?: string;
       permissionMode?: string;
-      slash_commands?: Array<{ name: string; description: string }>;
+      slash_commands?: string[];
       skills?: string[];
       agents?: Array<{ name: string; description: string; model?: string }>;
+      uuid: string;
     }
   // Assistant message
   | {
@@ -205,13 +206,21 @@ export type SDKMessage =
       parent_tool_use_id: string | null;
       elapsed_time_seconds?: number;
       task_id?: string;
+      uuid: string;
+      session_id: string;
     }
   // System — compact boundary
   | {
       type: 'system';
       subtype: 'compact_boundary';
       summary: string;
+      compact_metadata: {
+        trigger: 'auto' | 'manual';
+        pre_tokens: number;
+        preserved_segment?: string;
+      };
       session_id: string;
+      uuid: string;
     }
   // System — status
   | {
@@ -220,6 +229,7 @@ export type SDKMessage =
       status: string | null;
       session_id: string;
       permissionMode?: string;
+      uuid: string;
     }
   // System — api_retry
   | {
@@ -230,6 +240,7 @@ export type SDKMessage =
       retry_delay_ms: number;
       error_status: number | null;
       session_id: string;
+      uuid: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -460,8 +471,8 @@ export interface QueryLoopOptions {
   sessionId?: string;
   /** MCP server connection statuses (for init message). */
   mcpServerStatuses?: Array<{ name: string; status: string; error?: string }>;
-  /** Slash commands available in this session (for init message). */
-  slashCommands?: Array<{ name: string; description: string }>;
+  /** Slash command names available in this session (for init message). */
+  slashCommands?: string[];
   /** Skill names available in this session (for init message). */
   skills?: string[];
 }
@@ -514,6 +525,7 @@ export async function* queryLoop(
     mcp_servers: options?.mcpServerStatuses,
     slash_commands: options?.slashCommands,
     skills: options?.skills,
+    uuid: randomUUID(),
   };
   yield initMsg;
   options?.onProgress?.(initMsg);
@@ -725,13 +737,19 @@ export async function* queryLoop(
         compactState,
       );
       if (compactResult) {
+        const preTokens = accumulated.usage.input_tokens;
         messages.length = 0;
         messages.push(...compactResult.messages);
         const compactMsg: SDKMessage = {
           type: 'system',
           subtype: 'compact_boundary',
           summary: compactResult.summary,
+          compact_metadata: {
+            trigger: 'auto',
+            pre_tokens: preTokens,
+          },
           session_id: sessionId,
+          uuid: randomUUID(),
         };
         yield compactMsg;
         options?.onProgress?.(compactMsg);
@@ -788,6 +806,23 @@ export async function* queryLoop(
     const toolCtx = buildToolContext(config, sessionId, costTracker, turn);
     const pendingToolProgress: SDKMessage[] = [];
 
+    /** Build a tool_progress message with required uuid/session_id fields. */
+    function toolProgress(
+      toolName: string,
+      toolUseId: string,
+      elapsedTimeSec?: number,
+    ): SDKMessage {
+      return {
+        type: 'tool_progress',
+        tool_name: toolName,
+        tool_use_id: toolUseId,
+        parent_tool_use_id: null,
+        ...(elapsedTimeSec !== undefined ? { elapsed_time_seconds: elapsedTimeSec } : {}),
+        uuid: randomUUID(),
+        session_id: sessionId,
+      };
+    }
+
     const toolStartTimes = new Map<string, number>();
 
     const toolResultPromises = toolUseBlocks.map(async (toolUse) => {
@@ -795,25 +830,14 @@ export async function* queryLoop(
       toolStartTimes.set(toolUse.id, Date.now());
 
       // Emit tool_progress: running
-      const runningMsg: SDKMessage = {
-        type: 'tool_progress',
-        tool_name: toolUse.name,
-        tool_use_id: toolUse.id,
-        parent_tool_use_id: null,
-      };
+      const runningMsg = toolProgress(toolUse.name, toolUse.id);
       pendingToolProgress.push(runningMsg);
       options?.onProgress?.(runningMsg);
 
       if (!tool) {
         const errorContent = `Tool "${toolUse.name}" not found. Available tools: ${tools.map((t) => t.name).join(', ')}`;
         const elapsed = (Date.now() - (toolStartTimes.get(toolUse.id) ?? Date.now())) / 1000;
-        const doneMsg: SDKMessage = {
-          type: 'tool_progress',
-          tool_name: toolUse.name,
-          tool_use_id: toolUse.id,
-          parent_tool_use_id: null,
-          elapsed_time_seconds: elapsed,
-        };
+        const doneMsg = toolProgress(toolUse.name, toolUse.id, elapsed);
         pendingToolProgress.push(doneMsg);
         options?.onProgress?.(doneMsg);
         return { toolUseId: toolUse.id, content: errorContent, isError: true };
@@ -834,13 +858,7 @@ export async function* queryLoop(
       if (preHookResult.decision === 'deny') {
         const reason = preHookResult.decisionReason || 'Denied by PreToolUse hook';
         const elapsed = (Date.now() - (toolStartTimes.get(toolUse.id) ?? Date.now())) / 1000;
-        const doneMsg: SDKMessage = {
-          type: 'tool_progress',
-          tool_name: toolUse.name,
-          tool_use_id: toolUse.id,
-          parent_tool_use_id: null,
-          elapsed_time_seconds: elapsed,
-        };
+        const doneMsg = toolProgress(toolUse.name, toolUse.id, elapsed);
         pendingToolProgress.push(doneMsg);
         options?.onProgress?.(doneMsg);
         return { toolUseId: toolUse.id, content: reason, isError: true };
@@ -861,13 +879,7 @@ export async function* queryLoop(
           if (permResult.behavior === 'deny') {
             const deniedContent = `Permission denied: ${permResult.message}`;
             const elapsed = (Date.now() - (toolStartTimes.get(toolUse.id) ?? Date.now())) / 1000;
-            const doneMsg: SDKMessage = {
-              type: 'tool_progress',
-              tool_name: toolUse.name,
-              tool_use_id: toolUse.id,
-              parent_tool_use_id: null,
-              elapsed_time_seconds: elapsed,
-            };
+            const doneMsg = toolProgress(toolUse.name, toolUse.id, elapsed);
             pendingToolProgress.push(doneMsg);
             options?.onProgress?.(doneMsg);
             return { toolUseId: toolUse.id, content: deniedContent, isError: true };
@@ -920,13 +932,7 @@ export async function* queryLoop(
       }
 
       const elapsed = (Date.now() - (toolStartTimes.get(toolUse.id) ?? Date.now())) / 1000;
-      const completedMsg: SDKMessage = {
-        type: 'tool_progress',
-        tool_name: toolUse.name,
-        tool_use_id: toolUse.id,
-        parent_tool_use_id: null,
-        elapsed_time_seconds: elapsed,
-      };
+      const completedMsg = toolProgress(toolUse.name, toolUse.id, elapsed);
       pendingToolProgress.push(completedMsg);
       options?.onProgress?.(completedMsg);
 
