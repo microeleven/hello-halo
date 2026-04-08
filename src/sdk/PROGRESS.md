@@ -67,6 +67,21 @@ Branch: `feature/sdk`
 - Consolidated duplicate `shouldTriggerAutoCompact` → use `shouldAutoCompact` from compact.ts (removes `contextWindowForModel` import from query-loop.ts)
 - tsc --noEmit passes
 
+### Run 11 — Qwen Think Streaming + resumeSession + Anthropic listModels
+- **ThinkTagParser**: stateful `<think>` tag parser in `model-quirks.ts`
+  - Correctly handles `<think>` content spread across multiple SSE chunks
+  - `ThinkTagParser.process(text, index)` returns `reasoning_delta` + `text_delta` events
+  - Replaces naive stateless regex in `openai-compat.ts` streaming path
+  - Qwen model detection via `isQwenThinkModel()` — parser only instantiated for Qwen
+- **`unstable_v2_resumeSession(sessionId, options)`**: exported from `index.ts`
+  - Creates a fresh session with the supplied `sessionId` (CC SDK API compat)
+  - Consumer's session-manager can call it for session restore flow
+- **Anthropic `listModels()` real API call**:
+  - `GET /v1/models?limit=100` using the same auth headers
+  - Graceful fallback to hardcoded list on API error / no key
+  - Model `display_name` used for human-readable name
+- tsc --noEmit passes
+
 ---
 
 ## Priority Queue (Next Runs)
@@ -77,11 +92,9 @@ Branch: `feature/sdk`
 
 ### P2 (Important)
 - [ ] WebSearchTool real implementation
-- [ ] Anthropic listModels() API call instead of hardcoded list
 - [ ] Agent progress summaries (agentProgressSummaries fork+summarize every 30s)
 - [ ] SDKMessage task_started/task_progress/task_notification subtypes for sub-agent lifecycle
 
 ### P3 (Nice to have)
 - [ ] GlobTool hidden directory handling
 - [ ] TaskStopTool actual process termination
-- [ ] Streaming Qwen <think> tag stateful parser (partial tag across SSE chunks)

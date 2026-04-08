@@ -288,29 +288,62 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async listModels(): Promise<ProviderModelInfo[]> {
-    return [
+    // Fallback list used when the API call fails (no key, network error, etc.)
+    const FALLBACK: ProviderModelInfo[] = [
       {
-        id: 'claude-opus-4-6',
+        id: 'claude-opus-4-5',
         providerId: 'anthropic',
-        name: 'Claude Opus 4.6',
+        name: 'Claude Opus 4.5',
         contextWindow: 200_000,
         maxOutputTokens: 32_000,
       },
       {
-        id: 'claude-sonnet-4-6',
+        id: 'claude-sonnet-4-5',
         providerId: 'anthropic',
-        name: 'Claude Sonnet 4.6',
+        name: 'Claude Sonnet 4.5',
         contextWindow: 200_000,
         maxOutputTokens: 16_000,
       },
       {
-        id: 'claude-haiku-4-5-20251001',
+        id: 'claude-haiku-3-5',
         providerId: 'anthropic',
-        name: 'Claude Haiku 4.5',
+        name: 'Claude Haiku 3.5',
         contextWindow: 200_000,
         maxOutputTokens: 8_096,
       },
     ];
+
+    if (!this.apiKey) return FALLBACK;
+
+    try {
+      const url = `${this.baseUrl}/v1/models?limit=100`;
+      const headers = this.buildHeaders();
+      // GET request — remove content-type (not needed for GET)
+      delete (headers as Record<string, string | undefined>)['content-type'];
+
+      const response = await fetch(url, { method: 'GET', headers });
+      if (!response.ok) return FALLBACK;
+
+      const json = (await response.json()) as Record<string, unknown>;
+      const data = json?.data as Array<Record<string, unknown>> | undefined;
+      if (!data || !Array.isArray(data)) return FALLBACK;
+
+      const models: ProviderModelInfo[] = data
+        .filter((m) => typeof m.id === 'string')
+        .map((m) => ({
+          id: m.id as string,
+          providerId: 'anthropic',
+          name: (m.display_name as string | undefined) ?? (m.id as string),
+          // Context window and output limits are not returned by the models API;
+          // use sensible defaults for all Claude models.
+          contextWindow: 200_000,
+          maxOutputTokens: 8_096,
+        }));
+
+      return models.length > 0 ? models : FALLBACK;
+    } catch {
+      return FALLBACK;
+    }
   }
 
   async healthCheck(): Promise<ProviderStatus> {

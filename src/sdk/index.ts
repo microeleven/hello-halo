@@ -262,6 +262,24 @@ function wrapGeneratorAsQuery(
  */
 export const unstable_v2_createSession = createSession;
 
+/**
+ * Resume a previous session by its session ID.
+ *
+ * In the in-process SDK, this creates a fresh session with the supplied
+ * `sessionId` so that the consumer's session-manager can recognise it by
+ * the same ID.  Full message-history reload (disk persistence) is on the
+ * road-map; currently the conversation state is managed by the caller.
+ *
+ * Compatible with the CC SDK signature:
+ *   `unstable_v2_resumeSession(sessionId, options): Promise<SDKSession>`
+ */
+export async function unstable_v2_resumeSession(
+  sessionId: string,
+  options: Parameters<typeof createSession>[0],
+): ReturnType<typeof createSession> {
+  return createSession({ ...options, sessionId });
+}
+
 // ---------------------------------------------------------------------------
 // Types — full re-exports
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ import type {
   UsageInfo,
 } from '../types/provider.js';
 import { parseSSEStream } from './stream-parser.js';
-import { applyModelQuirks, applyStreamQuirks, isQuirkyModel } from './model-quirks.js';
+import { applyModelQuirks, applyStreamQuirks, isQuirkyModel, isQwenThinkModel, ThinkTagParser } from './model-quirks.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -250,6 +250,10 @@ export class OpenAiCompatProvider implements LlmProvider {
       fieldsToCheck.push(...COMMON_REASONING_FIELDS);
     }
 
+    // Stateful <think> tag parser — one instance per streaming request.
+    // Required for Qwen models that embed thinking in XML tags across chunks.
+    const thinkTagParser = isQwenThinkModel(modelId) ? new ThinkTagParser() : null;
+
     for await (const chunk of parseSSEStream(response, signal)) {
       // Emit message_start on first chunk
       if (!messageStarted) {
@@ -299,9 +303,17 @@ export class OpenAiCompatProvider implements LlmProvider {
       // Text content delta
       const content = delta.content as string | undefined;
       if (content) {
-        let evt: StreamEvent = { type: 'text_delta', index: 0, text: content };
-        if (isQuirkyModel(modelId)) evt = applyStreamQuirks(modelId, evt);
-        yield evt;
+        if (thinkTagParser) {
+          // Qwen: stateful <think> tag parser splits the chunk into
+          // reasoning_delta and text_delta events correctly across chunk boundaries.
+          for (const evt of thinkTagParser.process(content, 0)) {
+            yield evt;
+          }
+        } else {
+          let evt: StreamEvent = { type: 'text_delta', index: 0, text: content };
+          if (isQuirkyModel(modelId)) evt = applyStreamQuirks(modelId, evt);
+          yield evt;
+        }
       }
 
       // Tool call deltas

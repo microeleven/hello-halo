@@ -82,30 +82,104 @@ export function applyModelQuirks(
 }
 
 // ---------------------------------------------------------------------------
-// Stream-level quirks
+// Stream-level quirks — stateful ThinkTagParser
 // ---------------------------------------------------------------------------
+
+/**
+ * Stateful parser that splits a stream of text_delta chunks into
+ * `text_delta` and `reasoning_delta` events, correctly handling
+ * `<think>...</think>` tags that span multiple SSE chunks.
+ *
+ * Create one instance per streaming request for models that use XML-style
+ * thinking tags (e.g. Qwen). Feed each incoming text chunk via `process()`;
+ * it returns 0..N StreamEvents to yield in place of the original text_delta.
+ *
+ * Algorithm (mirrors the reference implementation in openai-chat-stream.ts):
+ *
+ *   While there is remaining text:
+ *     - If inside a <think> block:
+ *         - Search for `</think>`.  If found, emit reasoning_delta up to it,
+ *           clear the flag, advance past the closing tag.
+ *         - If not found, emit all remaining text as reasoning_delta.
+ *     - If not inside a <think> block:
+ *         - Search for `<think>`.  If found, emit text before it as text_delta,
+ *           set the flag, advance past the opening tag.
+ *         - If not found, emit all remaining text as text_delta.
+ */
+export class ThinkTagParser {
+  private inThinkTag = false;
+
+  /**
+   * Process one text chunk.
+   * @param text   Raw text from a text_delta SSE event.
+   * @param index  Content-block index (typically 0).
+   * @returns      Array of StreamEvents to yield instead of the original delta.
+   */
+  process(text: string, index: number): StreamEvent[] {
+    const events: StreamEvent[] = [];
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (this.inThinkTag) {
+        const closeIdx = remaining.indexOf('</think>');
+        if (closeIdx !== -1) {
+          const thinkContent = remaining.slice(0, closeIdx);
+          if (thinkContent) {
+            events.push({ type: 'reasoning_delta', index, reasoning: thinkContent });
+          }
+          this.inThinkTag = false;
+          // Skip the closing tag and any immediately following newlines
+          remaining = remaining.slice(closeIdx + 8).replace(/^[\n\r]+/, '');
+        } else {
+          // Closing tag not yet received — emit everything as reasoning
+          events.push({ type: 'reasoning_delta', index, reasoning: remaining });
+          remaining = '';
+        }
+      } else {
+        const openIdx = remaining.indexOf('<think>');
+        if (openIdx !== -1) {
+          // Text before the opening tag is regular output
+          const textBefore = remaining.slice(0, openIdx);
+          if (textBefore) {
+            events.push({ type: 'text_delta', index, text: textBefore });
+          }
+          this.inThinkTag = true;
+          remaining = remaining.slice(openIdx + 7);
+        } else {
+          // No opening tag — all regular text
+          events.push({ type: 'text_delta', index, text: remaining });
+          remaining = '';
+        }
+      }
+    }
+
+    return events;
+  }
+
+  /** Whether the parser is currently inside a `<think>` block. */
+  get isInsideThinkTag(): boolean {
+    return this.inThinkTag;
+  }
+}
 
 /**
  * Apply model-specific fixes to a single `StreamEvent`.
  *
- * Currently handles:
- * - Qwen `<think>` tag extraction from text_delta events
+ * Note: For `text_delta` events on Qwen models, use `ThinkTagParser.process()`
+ * instead — it handles `<think>` tags that span multiple SSE chunks correctly.
+ * This function only handles events other than `text_delta`.
  */
 export function applyStreamQuirks(
-  model: string,
+  _model: string,
   event: StreamEvent,
 ): StreamEvent {
-  const lower = model.toLowerCase();
-
-  // Qwen: intercept text deltas that contain <think> tags
-  if (lower.startsWith('qwen') && event.type === 'text_delta') {
-    const cleaned = event.text.replace(/<think>[\s\S]*?<\/think>/g, '');
-    if (cleaned !== event.text) {
-      return { ...event, text: cleaned };
-    }
-  }
-
+  // No stateless fixes needed currently — kept for API compatibility.
   return event;
+}
+
+/** Returns true if the model is a Qwen model that uses `<think>` XML tags. */
+export function isQwenThinkModel(model: string): boolean {
+  return model.toLowerCase().startsWith('qwen');
 }
 
 // ---------------------------------------------------------------------------
