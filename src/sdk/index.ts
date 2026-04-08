@@ -277,7 +277,8 @@ export async function unstable_v2_resumeSession(
   sessionId: string,
   options: Parameters<typeof createSession>[0],
 ): ReturnType<typeof createSession> {
-  return createSession({ ...options, sessionId });
+  // Pass resume: sessionId so createSession loads conversation history from transcript
+  return createSession({ ...options, sessionId, resume: sessionId });
 }
 
 // ---------------------------------------------------------------------------

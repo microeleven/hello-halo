@@ -22,6 +22,7 @@ import {
 import { initOrchestrator } from '../orchestrator/init.js';
 import type { OrchestratorHandle } from '../orchestrator/init.js';
 import { runEventHooks } from './hooks.js';
+import { TranscriptWriter, readTranscriptMessages } from './transcript.js';
 
 // ---------------------------------------------------------------------------
 // SDKSession interface
@@ -93,6 +94,10 @@ interface SessionState {
   slashCommands: SlashCommand[];
   /** Exit listeners for the transport shim. */
   exitListeners: Set<(error: Error | undefined) => void>;
+  /** Transcript writer for session persistence (null if disabled). */
+  transcriptWriter: TranscriptWriter | null;
+  /** Whether the system:init event has been emitted to the current consumer. */
+  initEmitted: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,12 +208,35 @@ export async function createSession(options: Options): Promise<SDKSession> {
     }
   }
 
+  // Resume session: load transcript messages from disk
+  let resumedMessages: Message[] = [];
+  const resumeSessionId = options.resume as string | undefined;
+  if (resumeSessionId) {
+    try {
+      const loaded = await readTranscriptMessages(resumeSessionId, config.cwd);
+      if (loaded && loaded.length > 0) {
+        resumedMessages = loaded;
+        console.log(
+          `[SDK] Resumed session ${resumeSessionId} with ${loaded.length} messages from transcript`,
+        );
+      } else {
+        console.log(`[SDK] No transcript found for session ${resumeSessionId}, starting fresh`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[SDK] Failed to load transcript for resume: ${msg}`);
+    }
+  }
+
+  // Create transcript writer for this session (persists conversation to disk)
+  const transcriptWriter = new TranscriptWriter(sessionId, config.cwd);
+
   const state: SessionState = {
     sessionId,
     config: configWithSignal,
     provider,
     tools,
-    messages: [],
+    messages: resumedMessages,
     abortController,
     closed: false,
     pendingMessages: [],
@@ -219,6 +247,8 @@ export async function createSession(options: Options): Promise<SDKSession> {
     orchestrator,
     slashCommands,
     exitListeners: new Set(),
+    transcriptWriter,
+    initEmitted: false,
   };
 
   // Fire SessionStart hook (fire-and-forget; advisory, does not block init)
@@ -391,11 +421,17 @@ function createSessionProxy(state: SessionState): SDKSession {
       const userMessage: Message = { role: 'user' as const, content: prompt };
       state.messages.push(userMessage);
 
+      // Persist user message to transcript (fire-and-forget)
+      void state.transcriptWriter?.writeUserMessage(userMessage);
+
       // Build the full conversation as initial messages for the query loop
       const initialMessages: Message[] = [...state.messages];
 
-      // Track whether we've yielded the first init event
-      const isFirstTurn = state.messages.length === 1;
+      // Track whether we've yielded the system:init event to this consumer.
+      // On fresh sessions this is the first call; on resumed sessions we always
+      // want the init event once (so the consumer can populate model/tools UI).
+      const shouldEmitInit = !state.initEmitted;
+      state.initEmitted = true;
 
       // Run the query loop, passing the session ID for consistent message session_id fields
       const queryOpts: QueryLoopOptions = {
@@ -418,17 +454,19 @@ function createSessionProxy(state: SessionState): SDKSession {
           return;
         }
 
-        // Track messages for session continuity
+        // Track messages for session continuity and persist to transcript
         if (msg.type === 'assistant') {
           state.messages.push(msg.message);
+          void state.transcriptWriter?.writeAssistantMessage(msg.message);
         } else if (msg.type === 'user') {
-          // Tool result messages from the query loop
+          // Tool result messages from the query loop — persist for full context on resume
           state.messages.push(msg.message);
+          void state.transcriptWriter?.writeUserMessage(msg.message);
         }
 
         // Skip init events after the first send (the session already knows
-        // its tools and model).
-        if (msg.type === 'system' && msg.subtype === 'init' && !isFirstTurn) {
+        // its tools and model). Also emits on resume so consumer can populate UI.
+        if (msg.type === 'system' && msg.subtype === 'init' && !shouldEmitInit) {
           continue;
         }
 

@@ -119,13 +119,32 @@ Branch: `feature/sdk`
   - Expanded `SKIP_DIRS` with `.npm`, `.yarn`, `.cache`, `.cargo`, `.gradle` for cache hygiene
 - tsc --noEmit passes
 
+### Run 14 — Transcript Persistence (Resume Session Support)
+- **`core/transcript.ts`** — new module for CC-compatible JSONL transcript read/write:
+  - `getTranscriptPath(sessionId, cwd)` — computes file path using same rule as CC CLI
+    (`CLAUDE_CONFIG_DIR/projects/<project-dir>/<session-id>.jsonl`, where `<project-dir>` replaces non-alphanumeric chars with `-`)
+  - `appendToTranscript(path, entry)` — async append to JSONL, auto-creates directories
+  - `TranscriptWriter` — stateful writer that tracks `parentUuid` chain across messages
+    - `writeUserMessage(message)` + `writeAssistantMessage(message)` → async append, returns uuid
+  - `readTranscriptMessages(sessionId, cwd)` — reads JSONL and reconstructs `Message[]` for resume
+    (skips non-message entries like `queue-operation`; returns null if file not found)
+  - `transcriptExists(sessionId, cwd)` — sync file existence check
+- **`core/session.ts`** — integrated transcript persistence:
+  - `createSession()` reads transcript on `options.resume` via `readTranscriptMessages()`
+    — populates `state.messages` with history before first send (full context restore)
+  - `TranscriptWriter` created for every session (writes to `$CLAUDE_CONFIG_DIR/projects/...`)
+  - `stream()` writes user message + each assistant/tool-result message as they flow
+  - `SessionState.initEmitted` flag replaces fragile `messages.length === 1` heuristic
+    — init event now correctly emitted once per consumer attach, including after resume
+- **`index.ts`** — `unstable_v2_resumeSession()` now passes `resume: sessionId` so transcript is loaded
+- tsc --noEmit passes
+
 ---
 
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
 - [ ] Worker Thread isolation for background agents (true parallelism)
-- [ ] resume session support (Options.resume → reload messages from transcript)
 
 ### P2 (Important)
 - [ ] WebSearchTool real implementation
