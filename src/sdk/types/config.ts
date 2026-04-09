@@ -243,6 +243,8 @@ export interface Options {
   fallbackModel?: string;
   /** Enable file checkpointing */
   enableFileCheckpointing?: boolean;
+  /** Per-tool configuration for built-in tools. */
+  toolConfig?: Record<string, Record<string, unknown>>;
   /** Fork session on resume */
   forkSession?: boolean;
   /** Beta features */
@@ -251,6 +253,8 @@ export interface Options {
   hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
   /** Session persistence */
   persistSession?: boolean;
+  /** Include hook lifecycle events in the output stream. */
+  includeHookEvents?: boolean;
   /** Include streaming events in output */
   includePartialMessages?: boolean;
   /** Thinking configuration */
@@ -263,6 +267,8 @@ export interface Options {
   maxTurns?: number;
   /** Maximum budget in USD */
   maxBudgetUsd?: number;
+  /** API-side task budget in tokens. Sent as output_config.task_budget. */
+  taskBudget?: { total: number };
   /** MCP server configurations */
   mcpServers?: Record<string, McpServerConfig>;
   /** Claude model to use */

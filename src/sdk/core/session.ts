@@ -25,6 +25,20 @@ import { runEventHooks } from './hooks.js';
 import { TranscriptWriter, readTranscriptMessages } from './transcript.js';
 
 // ---------------------------------------------------------------------------
+// Adaptive thinking model detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.5+).
+ * Per CC SDK: setMaxThinkingTokens on these models maps any non-zero value
+ * to adaptive mode rather than a fixed budget.
+ */
+function supportsAdaptiveThinking(model: string): boolean {
+  // Claude Opus 4+ and Sonnet 4.5+ support adaptive thinking
+  return /claude-(opus|sonnet)-4/i.test(model);
+}
+
+// ---------------------------------------------------------------------------
 // SDKSession interface
 // ---------------------------------------------------------------------------
 
@@ -199,7 +213,7 @@ export async function createSession(options: Options): Promise<SDKSession> {
   const configWithSignal = { ...config, abortSignal: abortController.signal };
   const orchestrator = initOrchestrator({
     provider,
-    config: configWithSignal,
+    config: () => state.config,
     tools,
   });
 
@@ -673,8 +687,12 @@ function createSessionProxy(state: SessionState): SDKSession {
   session.setMaxThinkingTokens = async function setMaxThinkingTokens(
     maxThinkingTokens: number | null,
   ): Promise<void> {
-    if (maxThinkingTokens === null) {
+    if (maxThinkingTokens === null || maxThinkingTokens === 0) {
       state.config = { ...state.config, thinking: { type: 'disabled' } };
+    } else if (supportsAdaptiveThinking(state.config.model)) {
+      // Per CC SDK docs: "On Opus 4.6, this is treated as on/off
+      // (0 = disabled, any other value = adaptive)."
+      state.config = { ...state.config, thinking: { type: 'adaptive' } };
     } else {
       state.config = {
         ...state.config,

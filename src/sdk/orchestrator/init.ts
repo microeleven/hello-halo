@@ -42,7 +42,7 @@ export interface OrchestratorHandle {
  */
 export function initOrchestrator(deps: {
   provider: LlmProvider;
-  config: QueryConfig;
+  config: QueryConfig | (() => QueryConfig);
   tools: Tool[];
 }): OrchestratorHandle {
   const { provider, config, tools } = deps;

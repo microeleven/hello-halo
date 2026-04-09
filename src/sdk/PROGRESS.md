@@ -432,6 +432,34 @@ Branch: `feature/sdk`
 
 ---
 
+### Run 24 — Stale Config Fix + Adaptive Thinking + Options Enrichment
+
+**Bug fix: sub-agent spawner uses stale config after interrupt()/setModel() (`orchestrator/spawner.ts`, `orchestrator/init.ts`, `core/session.ts`)**
+- `createSpawner()` captured `parentConfig` as a static snapshot at `initOrchestrator()` time
+- After `session.interrupt()` or `session.setModel()` / `setMaxThinkingTokens()` / `setPermissionMode()`,
+  `state.config` was replaced but the spawner closure still held the old reference
+- Sub-agents spawned after config changes inherited stale model, thinking, effort, and env values
+- Fix: `SpawnerDeps.parentConfig` now accepts `QueryConfig | (() => QueryConfig)` (getter pattern)
+- Session passes `() => state.config` — spawner calls `getParentConfig()` at spawn time (not at init time)
+- `query()` path still passes a static config (no mid-stream changes in the one-shot flow)
+
+**Bug fix: `setMaxThinkingTokens()` wrong mode for Opus 4.6+ (`core/session.ts`)**
+- Consumer calls `setMaxThinkingTokens(10240)` to enable thinking
+- Our SDK always mapped non-null values to `{ type: 'enabled', budgetTokens: N }`
+- Per CC SDK docs: "On Opus 4.6, this is treated as on/off (0 = disabled, any other value = adaptive)"
+- Added `supportsAdaptiveThinking(model)` — matches `claude-(opus|sonnet)-4` models
+- `setMaxThinkingTokens(N)` now correctly maps to `{ type: 'adaptive' }` on supported models
+- `setMaxThinkingTokens(0)` now correctly maps to `{ type: 'disabled' }` (was previously `{ type: 'enabled', budgetTokens: 0 }`)
+
+**Enhancement: Options type enrichment (`types/config.ts`)**
+- Added `toolConfig?: Record<string, Record<string, unknown>>` — per-tool configuration (CC SDK has ToolConfig)
+- Added `taskBudget?: { total: number }` — API-side task budget in tokens (CC SDK alpha feature)
+- Added `includeHookEvents?: boolean` — include hook lifecycle events in output stream
+
+- tsc --noEmit passes
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)

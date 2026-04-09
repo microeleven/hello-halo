@@ -334,7 +334,8 @@ async function runSubAgent(
 
 export interface SpawnerDeps {
   provider: LlmProvider;
-  parentConfig: QueryConfig;
+  /** Current parent config — use a getter so callers can provide a live reference. */
+  parentConfig: QueryConfig | (() => QueryConfig);
   parentTools: Tool[];
   registry: AgentRegistry;
 }
@@ -347,7 +348,12 @@ export interface SpawnerDeps {
  * - Background: returns immediately with agent_id, child runs in background
  */
 export function createSpawner(deps: SpawnerDeps) {
-  const { provider, parentConfig, parentTools, registry } = deps;
+  const { provider, parentConfig: parentConfigOrGetter, parentTools, registry } = deps;
+
+  /** Resolve the parent config — supports both static value and getter. */
+  const getParentConfig = typeof parentConfigOrGetter === 'function'
+    ? parentConfigOrGetter
+    : () => parentConfigOrGetter;
 
   return async function spawnAgent(
     request: AgentSpawnRequest,
@@ -387,14 +393,17 @@ export function createSpawner(deps: SpawnerDeps) {
 
     const runAgent = async () => {
       try {
+        // Resolve parent config at spawn time (not at createSpawner time)
+        // so that mid-session model/thinking changes are picked up.
+        const currentParentConfig = getParentConfig();
         const result = await runSubAgent(
           agentId,
           request,
-          parentConfig,
+          currentParentConfig,
           provider,
           parentTools,
           agentAbortController.signal,
-          parentConfig.agents,
+          currentParentConfig.agents,
           parentToolUseId,
           onMessage,
           ctx.sessionId,
