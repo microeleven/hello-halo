@@ -43,6 +43,11 @@ export function setAgentRegistry(registry: AgentRegistry | null): void {
   _agentRegistry = registry;
 }
 
+/** Get the current AgentRegistry (may be null if session not initialized). */
+export function getAgentRegistry(): AgentRegistry | null {
+  return _agentRegistry;
+}
+
 // ---------------------------------------------------------------------------
 // TaskListTool
 // ---------------------------------------------------------------------------

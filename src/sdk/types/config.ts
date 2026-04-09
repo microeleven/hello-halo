@@ -137,11 +137,253 @@ export type HookEvent =
   | 'CwdChanged'
   | 'FileChanged';
 
+// ---------------------------------------------------------------------------
+// Hook input types — typed union matching CC SDK contract (H19)
+// ---------------------------------------------------------------------------
+
+export type BaseHookInput = {
+  session_id: string;
+  transcript_path: string;
+  cwd: string;
+  permission_mode?: string;
+  agent_id?: string;
+  agent_type?: string;
+};
+
+export type PreToolUseHookInput = BaseHookInput & {
+  hook_event_name: 'PreToolUse';
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  tool_use_id: string;
+};
+
+export type PostToolUseHookInput = BaseHookInput & {
+  hook_event_name: 'PostToolUse';
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  tool_use_id: string;
+  tool_response: unknown;
+};
+
+export type PostToolUseFailureHookInput = BaseHookInput & {
+  hook_event_name: 'PostToolUseFailure';
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  tool_use_id: string;
+  error: string;
+};
+
+export type NotificationHookInput = BaseHookInput & {
+  hook_event_name: 'Notification';
+  message: string;
+  title?: string;
+  notification_type: string;
+};
+
+export type UserPromptSubmitHookInput = BaseHookInput & {
+  hook_event_name: 'UserPromptSubmit';
+  user_prompt: string;
+};
+
+export type SessionStartHookInput = BaseHookInput & {
+  hook_event_name: 'SessionStart';
+};
+
+export type SessionEndHookInput = BaseHookInput & {
+  hook_event_name: 'SessionEnd';
+};
+
+export type StopHookInput = BaseHookInput & {
+  hook_event_name: 'Stop';
+  stop_reason: string;
+  result_text: string;
+};
+
+export type StopFailureHookInput = BaseHookInput & {
+  hook_event_name: 'StopFailure';
+  stop_reason: string;
+  result_text: string;
+};
+
+export type SubagentStartHookInput = BaseHookInput & {
+  hook_event_name: 'SubagentStart';
+  agent_name: string;
+  agent_prompt: string;
+};
+
+export type SubagentStopHookInput = BaseHookInput & {
+  hook_event_name: 'SubagentStop';
+  agent_name: string;
+};
+
+export type PreCompactHookInput = BaseHookInput & {
+  hook_event_name: 'PreCompact';
+  message_count: number;
+  token_count: number;
+};
+
+export type PostCompactHookInput = BaseHookInput & {
+  hook_event_name: 'PostCompact';
+  summary: string;
+  pre_tokens: number;
+};
+
+export type PermissionRequestHookInput = BaseHookInput & {
+  hook_event_name: 'PermissionRequest';
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  tool_use_id: string;
+};
+
+export type PermissionDeniedHookInput = BaseHookInput & {
+  hook_event_name: 'PermissionDenied';
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  tool_use_id: string;
+};
+
+export type SetupHookInput = BaseHookInput & {
+  hook_event_name: 'Setup';
+};
+
+export type TeammateIdleHookInput = BaseHookInput & {
+  hook_event_name: 'TeammateIdle';
+  teammate_agent_id: string;
+};
+
+export type TaskCreatedHookInput = BaseHookInput & {
+  hook_event_name: 'TaskCreated';
+  task_id: string;
+  task_description: string;
+};
+
+export type TaskCompletedHookInput = BaseHookInput & {
+  hook_event_name: 'TaskCompleted';
+  task_id: string;
+  task_status: string;
+};
+
+export type ElicitationHookInput = BaseHookInput & {
+  hook_event_name: 'Elicitation';
+  mcp_server_name: string;
+  message: string;
+  mode?: 'form' | 'url';
+  url?: string;
+  elicitation_id?: string;
+  requested_schema?: Record<string, unknown>;
+};
+
+export type ElicitationResultHookInput = BaseHookInput & {
+  hook_event_name: 'ElicitationResult';
+  mcp_server_name: string;
+  elicitation_id?: string;
+  mode?: 'form' | 'url';
+  action: 'accept' | 'decline' | 'cancel';
+  content?: Record<string, unknown>;
+};
+
+export type ConfigChangeHookInput = BaseHookInput & {
+  hook_event_name: 'ConfigChange';
+  source: 'user_settings' | 'project_settings' | 'local_settings' | 'policy_settings' | 'skills';
+  file_path?: string;
+};
+
+export type WorktreeCreateHookInput = BaseHookInput & {
+  hook_event_name: 'WorktreeCreate';
+};
+
+export type WorktreeRemoveHookInput = BaseHookInput & {
+  hook_event_name: 'WorktreeRemove';
+};
+
+export type InstructionsLoadedHookInput = BaseHookInput & {
+  hook_event_name: 'InstructionsLoaded';
+  file_path: string;
+  memory_type: 'User' | 'Project' | 'Local' | 'Managed';
+  load_reason: 'session_start' | 'nested_traversal' | 'path_glob_match' | 'include' | 'compact';
+  globs?: string[];
+  trigger_file_path?: string;
+  parent_file_path?: string;
+};
+
+export type CwdChangedHookInput = BaseHookInput & {
+  hook_event_name: 'CwdChanged';
+  old_cwd: string;
+  new_cwd: string;
+};
+
+export type FileChangedHookInput = BaseHookInput & {
+  hook_event_name: 'FileChanged';
+  file_path: string;
+  event: 'change' | 'add' | 'unlink';
+};
+
+/**
+ * Typed union of all hook input variants — 27 hook events.
+ * Matches the CC SDK HookInput contract from sdk-types.ts.
+ */
+export type HookInput =
+  | PreToolUseHookInput
+  | PostToolUseHookInput
+  | PostToolUseFailureHookInput
+  | NotificationHookInput
+  | UserPromptSubmitHookInput
+  | SessionStartHookInput
+  | SessionEndHookInput
+  | StopHookInput
+  | StopFailureHookInput
+  | SubagentStartHookInput
+  | SubagentStopHookInput
+  | PreCompactHookInput
+  | PostCompactHookInput
+  | PermissionRequestHookInput
+  | PermissionDeniedHookInput
+  | SetupHookInput
+  | TeammateIdleHookInput
+  | TaskCreatedHookInput
+  | TaskCompletedHookInput
+  | ElicitationHookInput
+  | ElicitationResultHookInput
+  | ConfigChangeHookInput
+  | WorktreeCreateHookInput
+  | WorktreeRemoveHookInput
+  | InstructionsLoadedHookInput
+  | CwdChangedHookInput
+  | FileChangedHookInput;
+
+/**
+ * Async hook output — signal that the hook is still running.
+ */
+export type AsyncHookJSONOutput = {
+  async: true;
+  asyncTimeout?: number;
+};
+
+/**
+ * Sync hook output — immediate response.
+ */
+export type SyncHookJSONOutput = {
+  continue?: boolean;
+  suppressOutput?: boolean;
+  stopReason?: string;
+  decision?: 'approve' | 'block';
+  reason?: string;
+  systemMessage?: string;
+  hookSpecificOutput?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type HookJSONOutput = AsyncHookJSONOutput | SyncHookJSONOutput;
+
+/**
+ * Hook callback function — typed input parameter matching the CC SDK
+ * HookCallback contract (H19).
+ */
 export type HookCallback = (
-  input: Record<string, unknown>,
+  input: HookInput,
   toolUseID: string | undefined,
   options: { signal: AbortSignal },
-) => Promise<Record<string, unknown>>;
+) => Promise<HookJSONOutput>;
 
 export interface HookCallbackMatcher {
   matcher?: string;
@@ -192,19 +434,35 @@ export type McpSdkServerConfigWithInstance = McpSdkServerConfig & {
   instance: import('../tools/mcp/sdk-server.js').SdkMcpServerInstance;
 };
 
-export type McpServerStatus = {
+/** Runtime status of an MCP server connection. */
+export interface McpServerStatus {
+  /** Server name as configured. */
   name: string;
+  /** Current connection status. */
   status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled';
+  /** Server information (available when connected). */
   serverInfo?: { name: string; version: string };
+  /** Error message (available when status is 'failed'). */
   error?: string;
-  tools?: Array<{ name: string; description?: string }>;
-};
+  /** Configuration scope (e.g., 'project', 'user', 'local'). */
+  scope?: string;
+  /** Tools provided by this server (available when connected). */
+  tools?: Array<{
+    name: string;
+    description?: string;
+    annotations?: { readOnly?: boolean; destructive?: boolean; openWorld?: boolean };
+  }>;
+}
 
-export type McpSetServersResult = {
+/** Result of a setMcpServers() operation. */
+export interface McpSetServersResult {
+  /** Names of servers that were added. */
   added: string[];
+  /** Names of servers that were removed. */
   removed: string[];
+  /** Map of server names to error messages for servers that failed to connect. */
   errors: Record<string, string>;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Agent Definition
@@ -282,6 +540,8 @@ export interface ModelInfo {
 export interface SlashCommand {
   name: string;
   description: string;
+  /** Hint text for the argument (e.g., "<file_path>"). */
+  argumentHint?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -502,3 +762,117 @@ export interface AgentContext {
   /** Parent agent ID (if sub-agent) */
   parentAgentId?: string;
 }
+
+// ---------------------------------------------------------------------------
+// ModelInfo — available model metadata (CC SDK Query.supportedModels())
+// ---------------------------------------------------------------------------
+
+/** Information about an available model. */
+export interface ModelInfo {
+  /** Model identifier to use in API calls. */
+  value: string;
+  /** Human-readable display name. */
+  displayName: string;
+  /** Description of the model's capabilities. */
+  description: string;
+  /** Whether this model supports effort levels. */
+  supportsEffort?: boolean;
+  /** Available effort levels for this model. */
+  supportedEffortLevels?: EffortLevel[];
+}
+
+// ---------------------------------------------------------------------------
+// AgentInfo — available sub-agent metadata (CC SDK Query.supportedAgents())
+// ---------------------------------------------------------------------------
+
+/** Information about an available sub-agent. */
+export interface AgentInfo {
+  /** Agent type identifier. */
+  name: string;
+  /** Description of when to use this agent. */
+  description: string;
+  /** Model alias this agent uses. If omitted, inherits the parent's model. */
+  model?: string;
+}
+
+// ---------------------------------------------------------------------------
+// AccountInfo — authenticated account metadata
+// ---------------------------------------------------------------------------
+
+/** Information about the logged-in user's account. */
+export interface AccountInfo {
+  email?: string;
+  organization?: string;
+  subscriptionType?: string;
+  tokenSource?: string;
+  apiKeySource?: string;
+  /** Active API backend. */
+  apiProvider?: 'firstParty' | 'bedrock' | 'vertex' | 'foundry';
+}
+
+// ---------------------------------------------------------------------------
+// RewindFilesResult — result of file rewind operation
+// ---------------------------------------------------------------------------
+
+/** Result of a rewindFiles operation. */
+export interface RewindFilesResult {
+  canRewind: boolean;
+  error?: string;
+  filesChanged?: string[];
+  insertions?: number;
+  deletions?: number;
+}
+
+// ---------------------------------------------------------------------------
+// SDKControlInitializeResponse
+// ---------------------------------------------------------------------------
+
+/** Full initialization response from the session. */
+export interface SDKControlInitializeResponse {
+  commands: SlashCommand[];
+  models: ModelInfo[];
+  agents: AgentInfo[];
+  accountInfo: AccountInfo;
+  outputStyle?: string;
+  mcpServers: McpServerStatus[];
+}
+
+// ---------------------------------------------------------------------------
+// SDKControlGetContextUsageResponse
+// ---------------------------------------------------------------------------
+
+/** Context window usage breakdown. */
+export interface SDKControlGetContextUsageResponse {
+  usage: Record<string, number>;
+  totalTokens: number;
+  contextWindow: number;
+}
+
+// ---------------------------------------------------------------------------
+// SDKPermissionDenial — permission denial record
+// ---------------------------------------------------------------------------
+
+/** Record of a denied tool use. */
+export interface SDKPermissionDenial {
+  tool_name: string;
+  tool_use_id: string;
+  tool_input: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// ApiKeySource
+// ---------------------------------------------------------------------------
+
+export type ApiKeySource = 'user' | 'project' | 'org' | 'temporary' | 'oauth';
+
+// ---------------------------------------------------------------------------
+// FastModeState
+// ---------------------------------------------------------------------------
+
+export type FastModeState = 'off' | 'cooldown' | 'on';
+
+// ---------------------------------------------------------------------------
+// ExitReason
+// ---------------------------------------------------------------------------
+
+export type ExitReason = 'clear' | 'resume' | 'logout' | 'prompt_input_exit' | 'other' | 'bypass_permissions_disabled';

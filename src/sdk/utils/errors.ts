@@ -59,6 +59,44 @@ export class ProviderError extends SDKError {
   ): ProviderError {
     return new ProviderError(message, { statusCode: 400, retryable: false });
   }
+
+  /**
+   * Check whether this error represents a context-window-exceeded / prompt-too-long
+   * condition. The Anthropic API returns HTTP 400 with error type
+   * "invalid_request_error" and a message containing "prompt is too long" or
+   * "context_window_exceeded".
+   */
+  get isContextWindowExceeded(): boolean {
+    if (this.statusCode !== 400) return false;
+    const msg = this.message.toLowerCase();
+    return (
+      msg.includes('prompt is too long') ||
+      msg.includes('context_window_exceeded') ||
+      msg.includes('prompt_too_long') ||
+      msg.includes('context window')
+    );
+  }
+}
+
+/**
+ * Check whether an arbitrary error represents a context-window-exceeded condition.
+ * Works with both ProviderError and raw Error objects from provider SDKs.
+ */
+export function isContextWindowExceededError(err: unknown): boolean {
+  if (err instanceof ProviderError) return err.isContextWindowExceeded;
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    const status = (err as { status?: number }).status;
+    if (status === 400) {
+      return (
+        msg.includes('prompt is too long') ||
+        msg.includes('context_window_exceeded') ||
+        msg.includes('prompt_too_long') ||
+        msg.includes('context window')
+      );
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +176,36 @@ export class AbortError extends SDKError {
     super('ABORTED', message);
     this.name = 'AbortError';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-variant abort detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect whether an error represents an abort/cancellation, regardless of
+ * source. Covers:
+ * - Our own `AbortError`
+ * - Anthropic SDK's `APIUserAbortError`
+ * - DOM `DOMException` with name "AbortError" (fetch)
+ * - Any error where the associated signal is already aborted
+ */
+export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (err instanceof AbortError) return true;
+
+  if (err instanceof Error) {
+    // DOMException thrown by fetch when the signal is aborted
+    if (err.name === 'AbortError') return true;
+    // Anthropic SDK abort class
+    if (err.name === 'APIUserAbortError') return true;
+    // Some libraries set err.code
+    if ((err as { code?: string }).code === 'ABORT_ERR') return true;
+  }
+
+  // Signal-based detection: if the signal is aborted, treat any error as abort
+  if (signal?.aborted) return true;
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------

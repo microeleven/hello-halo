@@ -36,25 +36,51 @@ export const inputSchema = {
       enum: ['content', 'files_with_matches', 'count'],
       description: 'Output mode (default: files_with_matches)',
     },
+    '-B': {
+      type: 'number',
+      description:
+        'Number of lines to show before each match (rg -B). Requires output_mode: "content", ignored otherwise.',
+    },
+    '-A': {
+      type: 'number',
+      description:
+        'Number of lines to show after each match (rg -A). Requires output_mode: "content", ignored otherwise.',
+    },
+    '-C': {
+      type: 'number',
+      description: 'Alias for context.',
+    },
     context: {
       type: 'number',
-      description: 'Number of context lines before and after each match',
-    },
-    '-i': {
-      type: 'boolean',
-      description: 'Case insensitive search',
+      description:
+        'Number of lines to show before and after each match (rg -C). Requires output_mode: "content", ignored otherwise.',
     },
     '-n': {
       type: 'boolean',
-      description: 'Show line numbers (for content mode)',
+      description:
+        'Show line numbers in output (rg -n). Requires output_mode: "content", ignored otherwise. Defaults to true.',
+    },
+    '-i': {
+      type: 'boolean',
+      description: 'Case insensitive search (rg -i)',
     },
     head_limit: {
       type: 'number',
-      description: 'Limit output to first N entries (default 250)',
+      description:
+        'Limit output to first N lines/entries, equivalent to "| head -N". Works across all output modes: ' +
+        'content (limits output lines), files_with_matches (limits file paths), count (limits count entries). ' +
+        'Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly -- large result sets waste context).',
+    },
+    offset: {
+      type: 'number',
+      description:
+        'Skip first N lines/entries before applying head_limit, equivalent to "| tail -n +N | head -N". ' +
+        'Works across all output modes. Defaults to 0.',
     },
     multiline: {
       type: 'boolean',
-      description: 'Enable multiline mode where . matches newlines',
+      description:
+        'Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false.',
     },
   },
   required: ['pattern'],

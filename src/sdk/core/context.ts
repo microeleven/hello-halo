@@ -11,6 +11,7 @@ import type {
   Options,
   QueryConfig,
   AgentContext,
+  ThinkingConfig,
 } from '../types/config.js';
 import type { Tool, ToolContext, ShellState } from '../types/tool.js';
 import { CostTracker } from './cost.js';
@@ -30,6 +31,36 @@ const DEFAULT_TOOL_RESULT_BUDGET = 50_000;
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve the thinking configuration from Options.
+ *
+ * Priority: explicit `thinking` config > deprecated `maxThinkingTokens` > disabled.
+ * For models that support adaptive thinking (Opus 4.6+, Sonnet 4+), any non-zero
+ * maxThinkingTokens maps to `{ type: 'adaptive' }` rather than a fixed budget.
+ */
+function resolveThinking(options: Options): ThinkingConfig {
+  // Explicit thinking config always wins
+  if (options.thinking) return options.thinking;
+
+  // Deprecated maxThinkingTokens fallback (consumer uses this)
+  if (options.maxThinkingTokens != null && options.maxThinkingTokens > 0) {
+    const model = options.model ?? DEFAULT_MODEL;
+    if (supportsAdaptiveThinking(model)) {
+      return { type: 'adaptive' };
+    }
+    return { type: 'enabled', budgetTokens: options.maxThinkingTokens };
+  }
+
+  return { type: 'disabled' };
+}
+
+/**
+ * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4+).
+ */
+function supportsAdaptiveThinking(model: string): boolean {
+  return /claude-(opus|sonnet)-4/i.test(model);
+}
+
+/**
  * Resolve user-provided Options into a fully populated QueryConfig.
  * Fills in defaults for any unset fields.
  */
@@ -44,7 +75,7 @@ export function resolveQueryConfig(options: Options): QueryConfig {
     cwd: options.cwd ?? process.cwd(),
     env: options.env ?? {},
     systemPrompt: options.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
-    thinking: options.thinking ?? { type: 'disabled' },
+    thinking: resolveThinking(options),
     effort: options.effort ?? 'high',
     toolResultBudget: options.toolResultBudget ?? DEFAULT_TOOL_RESULT_BUDGET,
     includePartialMessages: options.includePartialMessages ?? false,

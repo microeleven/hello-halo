@@ -5,7 +5,7 @@
  */
 
 import type { Message, ContentBlock, ToolResultBlock, LlmProvider } from '../types/provider.js';
-import { estimateMessageTokens } from '../utils/tokens.js';
+import { estimateMessageTokens, ApiTokenAnchor } from '../utils/tokens.js';
 import {
   AUTO_COMPACT_THRESHOLD,
   MAX_INPUT_TOKENS,
@@ -185,8 +185,13 @@ function totalToolResultChars(messages: Message[]): number {
  * the corresponding tool_result blocks, the split point is adjusted to
  * keep both messages.
  */
-export function apiCompact(messages: Message[]): Message[] | null {
-  const totalTokens = estimateMessageTokens(messages);
+export function apiCompact(
+  messages: Message[],
+  anchor?: ApiTokenAnchor,
+): Message[] | null {
+  const totalTokens = anchor
+    ? anchor.estimateWithAnchor(messages)
+    : estimateMessageTokens(messages);
   if (totalTokens < MAX_INPUT_TOKENS) {
     return null;
   }

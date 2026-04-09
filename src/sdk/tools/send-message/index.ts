@@ -16,7 +16,35 @@ import {
 } from './schema.js';
 
 // ---------------------------------------------------------------------------
-// In-process inbox (simple implementation)
+// Structured protocol message types
+// ---------------------------------------------------------------------------
+
+export interface ShutdownRequest {
+  type: 'shutdown_request';
+  reason?: string;
+}
+
+export interface ShutdownResponse {
+  type: 'shutdown_response';
+  request_id: string;
+  approve: boolean;
+  reason?: string;
+}
+
+export interface PlanApprovalResponse {
+  type: 'plan_approval_response';
+  request_id: string;
+  approve: boolean;
+  feedback?: string;
+}
+
+export type StructuredMessage =
+  | ShutdownRequest
+  | ShutdownResponse
+  | PlanApprovalResponse;
+
+// ---------------------------------------------------------------------------
+// In-process inbox (per-session scoped)
 // ---------------------------------------------------------------------------
 
 export interface AgentMessage {
@@ -26,18 +54,41 @@ export interface AgentMessage {
   timestamp: number;
 }
 
-const inbox = new Map<string, AgentMessage[]>();
+/**
+ * Per-session inbox store. Keyed by sessionId, then by recipient name.
+ * Prevents message leaks across independent sessions.
+ */
+const sessionInboxes = new Map<string, Map<string, AgentMessage[]>>();
 
-/** Remove and return all messages queued for `recipient`. */
-export function drainInbox(recipient: string): AgentMessage[] {
+/** Get or create the inbox map for a session. */
+function getSessionInbox(sessionId: string): Map<string, AgentMessage[]> {
+  let inbox = sessionInboxes.get(sessionId);
+  if (!inbox) {
+    inbox = new Map();
+    sessionInboxes.set(sessionId, inbox);
+  }
+  return inbox;
+}
+
+/** Remove and return all messages queued for `recipient` in a session. */
+export function drainInbox(recipient: string, sessionId: string): AgentMessage[] {
+  const inbox = sessionInboxes.get(sessionId);
+  if (!inbox) return [];
   const messages = inbox.get(recipient) ?? [];
   inbox.delete(recipient);
   return messages;
 }
 
-/** Read (without removing) all messages queued for `recipient`. */
-export function peekInbox(recipient: string): AgentMessage[] {
+/** Read (without removing) all messages queued for `recipient` in a session. */
+export function peekInbox(recipient: string, sessionId: string): AgentMessage[] {
+  const inbox = sessionInboxes.get(sessionId);
+  if (!inbox) return [];
   return inbox.get(recipient) ?? [];
+}
+
+/** Clean up all inboxes for a session. */
+export function clearSessionInbox(sessionId: string): void {
+  sessionInboxes.delete(sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -46,19 +97,28 @@ export function peekInbox(recipient: string): AgentMessage[] {
 
 export type MessageRouter = (
   to: string,
-  message: string,
+  message: string | StructuredMessage,
   summary: string | undefined,
   ctx: ToolContext,
 ) => Promise<ToolResult>;
 
 let _messageRouter: MessageRouter | null = null;
+/** Session ID that owns the current router — prevents cross-session leaks. */
+let _routerSessionId: string | null = null;
 
 /**
  * Register the real message router. Called by the orchestrator.
  * Pass `null` to reset to default inbox mode.
+ *
+ * @param sessionId - When provided, tags the router to a specific session
+ *   so stale routers from old sessions are not accidentally reused.
  */
-export function setMessageRouter(router: MessageRouter | null): void {
+export function setMessageRouter(
+  router: MessageRouter | null,
+  sessionId?: string,
+): void {
   _messageRouter = router;
+  _routerSessionId = sessionId ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,25 +136,55 @@ export const SendMessageTool: Tool = {
     ctx: ToolContext,
   ): Promise<ToolResult> {
     const to = input.to as string | undefined;
-    const message = input.message as string | undefined;
+    const rawMessage = input.message as string | StructuredMessage | undefined;
     const summary = input.summary as string | undefined;
 
     if (!to || typeof to !== 'string') {
       return toolError('Missing required parameter: to');
     }
-    if (!message || typeof message !== 'string') {
+    if (rawMessage === undefined || rawMessage === null) {
       return toolError('Missing required parameter: message');
     }
-    if (!message.trim()) {
+
+    // Determine if the message is structured or plain text
+    const isStructured = typeof rawMessage === 'object' && rawMessage !== null && 'type' in rawMessage;
+
+    if (typeof rawMessage === 'string' && !rawMessage.trim()) {
       return toolError('Message cannot be empty.');
     }
 
-    // If a real router is registered, use it
+    // If a real router is registered, use it.
+    // Validate session ownership to prevent cross-session leaks (H1).
     if (_messageRouter) {
-      return _messageRouter(to, message, summary, ctx);
+      if (_routerSessionId && ctx.sessionId && _routerSessionId !== ctx.sessionId) {
+        return toolError('Message router belongs to a different session. Re-initialize the orchestrator.');
+      }
+      return _messageRouter(to, rawMessage, summary, ctx);
     }
 
-    // Default in-process inbox implementation
+    // Handle structured protocol messages in stub mode
+    if (isStructured) {
+      const structured = rawMessage as StructuredMessage;
+      switch (structured.type) {
+        case 'shutdown_request':
+          return toolSuccess(
+            `Shutdown request sent to '${to}'${structured.reason ? `: ${structured.reason}` : ''}`,
+          );
+        case 'shutdown_response':
+          return toolSuccess(
+            `Shutdown ${structured.approve ? 'approved' : 'rejected'} (request_id: ${structured.request_id})`,
+          );
+        case 'plan_approval_response':
+          return toolSuccess(
+            `Plan ${structured.approve ? 'approved' : 'rejected'} for '${to}' (request_id: ${structured.request_id})${structured.feedback ? `: ${structured.feedback}` : ''}`,
+          );
+        default:
+          return toolError(`Unknown structured message type`);
+      }
+    }
+
+    // Plain text message — use per-session inbox
+    const message = rawMessage as string;
     const now = Math.floor(Date.now() / 1000);
     const msg: AgentMessage = {
       from: ctx.sessionId,
@@ -104,6 +194,7 @@ export const SendMessageTool: Tool = {
     };
 
     const preview = summary ?? message.slice(0, 60);
+    const inbox = getSessionInbox(ctx.sessionId);
 
     if (to === '*') {
       // Broadcast

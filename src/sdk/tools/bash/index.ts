@@ -40,8 +40,10 @@ export const BashTool: Tool = {
     );
     const runBg = Boolean(input.run_in_background);
 
-    // Get or create persistent shell state for this session
-    const state = shellStateManager.get(ctx.sessionId, ctx.cwd);
+    // Get or create persistent shell state for this session.
+    // Uses agentId for sub-agent isolation when available.
+    const agentId = (ctx as unknown as Record<string, unknown>).agentId as string | undefined;
+    const state = shellStateManager.get(ctx.sessionId, ctx.cwd, agentId);
 
     // --- Background path ---
     if (runBg) {
@@ -105,7 +107,7 @@ export const BashTool: Tool = {
             for (const [k, v] of parsed.envVars) {
               state.envVars.set(k, v);
             }
-            shellStateManager.update(ctx.sessionId, state);
+            shellStateManager.update(ctx.sessionId, state, agentId);
           }
         }
 
@@ -115,7 +117,7 @@ export const BashTool: Tool = {
           for (const [k, v] of exports) {
             state.envVars.set(k, v);
           }
-          shellStateManager.update(ctx.sessionId, state);
+          shellStateManager.update(ctx.sessionId, state, agentId);
         }
 
         // Build output string

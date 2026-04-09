@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LlmProvider, ContentBlock } from '../types/provider.js';
 import type { Tool, ToolContext, ToolResult } from '../types/tool.js';
+import { CostTracker } from '../core/cost.js';
 import { toolSuccess, toolError } from '../types/tool.js';
 import type { Options, QueryConfig, AgentDefinition } from '../types/config.js';
 import { resolveQueryConfig } from '../core/context.js';
@@ -338,6 +339,8 @@ export interface SpawnerDeps {
   parentConfig: QueryConfig | (() => QueryConfig);
   parentTools: Tool[];
   registry: AgentRegistry;
+  /** Parent cost tracker — sub-agent costs are rolled up into this after completion. */
+  parentCostTracker?: CostTracker;
 }
 
 /**
@@ -414,6 +417,31 @@ export function createSpawner(deps: SpawnerDeps) {
           entry.messages = result.messages;
         }
         registry.complete(agentId, result.text);
+
+        // H3: Roll up sub-agent costs to parent budget.
+        // Without this, parent's budget check doesn't include child spending,
+        // allowing budget overruns when multiple sub-agents are spawned.
+        if (ctx.costTracker && result.costUsd > 0) {
+          // Extract usage from the sub-agent's result message
+          const resultMsg = result.messages.find(
+            (m) => m.type === 'result' && 'usage' in m,
+          );
+          if (resultMsg && 'usage' in resultMsg) {
+            const usage = (resultMsg as unknown as { usage: Record<string, number> }).usage;
+            const childTracker = new CostTracker(currentParentConfig.model);
+            childTracker.add(
+              {
+                input_tokens: usage.input_tokens ?? 0,
+                output_tokens: usage.output_tokens ?? 0,
+                cache_creation_input_tokens:
+                  usage.cache_creation_input_tokens ?? 0,
+                cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+              },
+              currentParentConfig.model,
+            );
+            ctx.costTracker.addChildCost(childTracker);
+          }
+        }
 
         return result;
       } catch (err: unknown) {

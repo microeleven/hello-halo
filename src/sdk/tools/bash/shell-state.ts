@@ -8,34 +8,58 @@
 import type { ShellState } from '../../types/tool.js';
 
 /**
- * Manages shell state per session.
- * Each session has its own ShellState that persists cwd and env vars
- * across multiple Bash tool invocations.
+ * Manages shell state per session and agent.
+ * Each session+agent combination has its own ShellState that persists cwd
+ * and env vars across multiple Bash tool invocations.
+ *
+ * Sub-agents get isolated shell state by using a composite key of
+ * sessionId + agentId. This prevents cwd/env leaks between parent
+ * and child agents sharing the same sessionId.
  */
 export class ShellStateManager {
   private states = new Map<string, ShellState>();
 
-  /** Get or create the ShellState for a session. */
-  get(sessionId: string, defaultCwd: string): ShellState {
-    let state = this.states.get(sessionId);
+  /**
+   * Build a composite key for state isolation.
+   * When agentId is provided (sub-agent context), the key is
+   * `sessionId:agentId` to prevent cross-agent state leaks.
+   */
+  private key(sessionId: string, agentId?: string): string {
+    return agentId ? `${sessionId}:${agentId}` : sessionId;
+  }
+
+  /** Get or create the ShellState for a session (optionally scoped to an agent). */
+  get(sessionId: string, defaultCwd: string, agentId?: string): ShellState {
+    const k = this.key(sessionId, agentId);
+    let state = this.states.get(k);
     if (!state) {
       state = {
         cwd: defaultCwd,
         envVars: new Map(),
       };
-      this.states.set(sessionId, state);
+      this.states.set(k, state);
     }
     return state;
   }
 
-  /** Update the ShellState for a session. */
-  update(sessionId: string, state: ShellState): void {
-    this.states.set(sessionId, state);
+  /** Update the ShellState for a session (optionally scoped to an agent). */
+  update(sessionId: string, state: ShellState, agentId?: string): void {
+    this.states.set(this.key(sessionId, agentId), state);
   }
 
-  /** Remove state for a session (cleanup). */
-  remove(sessionId: string): void {
-    this.states.delete(sessionId);
+  /** Remove state for a session (optionally scoped to an agent). */
+  remove(sessionId: string, agentId?: string): void {
+    this.states.delete(this.key(sessionId, agentId));
+  }
+
+  /** Remove all states for a session (including all agent-scoped states). */
+  removeAll(sessionId: string): void {
+    const prefix = sessionId + ':';
+    for (const key of this.states.keys()) {
+      if (key === sessionId || key.startsWith(prefix)) {
+        this.states.delete(key);
+      }
+    }
   }
 }
 

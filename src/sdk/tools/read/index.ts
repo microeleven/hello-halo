@@ -51,15 +51,23 @@ export class ReadTool implements Tool {
 
     // Image files
     if (IMAGE_EXTENSIONS.has(ext)) {
-      const result = await readImage(resolvedPath);
-      return toolSuccess(result);
+      try {
+        const result = await readImage(resolvedPath);
+        return toolSuccess(result);
+      } catch (e) {
+        return toolError(e instanceof Error ? e.message : String(e));
+      }
     }
 
     // PDF files
     if (ext === 'pdf') {
-      const pages = input.pages as string | undefined;
-      const result = await readPdf(resolvedPath, pages);
-      return toolSuccess(result);
+      try {
+        const pages = input.pages as string | undefined;
+        const result = await readPdf(resolvedPath, pages);
+        return toolSuccess(result);
+      } catch (e) {
+        return toolError(e instanceof Error ? e.message : String(e));
+      }
     }
 
     // Jupyter notebooks

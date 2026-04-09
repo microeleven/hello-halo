@@ -271,6 +271,33 @@ export class CostTracker {
     return result;
   }
 
+  /**
+   * Roll up costs from a child (sub-agent) CostTracker into this parent tracker.
+   * This ensures the parent's budget check includes child spending.
+   */
+  addChildCost(child: CostTracker): void {
+    this._inputTokens += child.totalInputTokens;
+    this._outputTokens += child.totalOutputTokens;
+    this._cacheCreationTokens += child.totalCacheCreationTokens;
+    this._cacheReadTokens += child.totalCacheReadTokens;
+    this._totalCostUsd += child.totalCostUsd;
+
+    // Merge per-model usage
+    for (const [modelKey, childEntry] of Object.entries(child.getModelUsage())) {
+      const existing = this._modelUsage.get(modelKey);
+      if (existing) {
+        existing.input_tokens += childEntry.input_tokens;
+        existing.output_tokens += childEntry.output_tokens;
+        existing.cache_creation_input_tokens +=
+          childEntry.cache_creation_input_tokens;
+        existing.cache_read_input_tokens += childEntry.cache_read_input_tokens;
+        existing.total_cost_usd += childEntry.total_cost_usd;
+      } else {
+        this._modelUsage.set(modelKey, { ...childEntry });
+      }
+    }
+  }
+
   /** Human-readable summary string. */
   summary(): string {
     const cost = this.totalCostUsd;

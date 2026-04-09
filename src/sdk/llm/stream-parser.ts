@@ -28,6 +28,9 @@ export async function* parseSSEStream(
   let buffer = '';
   let currentEvent: string | undefined;
 
+  let _dbgReadCount = 0;
+  let _dbgYieldCount = 0;
+
   try {
     while (true) {
       if (signal?.aborted) {
@@ -35,7 +38,10 @@ export async function* parseSSEStream(
       }
 
       const { done, value } = await reader.read();
+      _dbgReadCount++;
+      const _dbgBytes = value?.byteLength ?? 0;
       if (done) {
+        console.log(`[SSE-PARSER] read#${_dbgReadCount} done=true, total yields=${_dbgYieldCount}`);
         break;
       }
 
@@ -45,6 +51,12 @@ export async function* parseSSEStream(
       const lines = buffer.split('\n');
       // The last element may be an incomplete line — keep it in the buffer
       buffer = lines.pop() ?? '';
+
+      // Count data lines in this chunk for diagnostics
+      const _dbgDataLines = lines.filter(l => l.trimEnd().startsWith('data:') && !l.includes('[DONE]')).length;
+      if (_dbgDataLines > 0) {
+        console.log(`[SSE-PARSER] read#${_dbgReadCount} bytes=${_dbgBytes} data_lines=${_dbgDataLines} t=${Date.now()}`);
+      }
 
       for (const rawLine of lines) {
         const line = rawLine.trimEnd();
@@ -71,6 +83,7 @@ export async function* parseSSEStream(
 
           // [DONE] sentinel — end of stream
           if (data === '[DONE]') {
+            console.log(`[SSE-PARSER] [DONE] received, total yields=${_dbgYieldCount}`);
             return;
           }
 
@@ -86,6 +99,9 @@ export async function* parseSSEStream(
               parsed.__event = currentEvent;
               currentEvent = undefined;
             }
+            _dbgYieldCount++;
+            const _evType = (parsed.__event ?? parsed.type) as string;
+            console.log(`[SSE-PARSER] yield#${_dbgYieldCount} type=${_evType} t=${Date.now()}`);
             yield parsed;
           } catch {
             // Malformed JSON — skip this chunk. This can happen with

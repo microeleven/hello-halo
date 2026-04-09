@@ -7,6 +7,8 @@
 import type { Tool } from '../types/tool.js';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from './constants.js';
 import {
+  introSection,
+  systemSection,
   coreIdentitySection,
   toolUseGuidelinesSection,
   actionsSection,
@@ -66,6 +68,8 @@ function getAttributionText(isSDK: boolean): string {
  * ```
  * [CACHEABLE SECTIONS — before dynamic boundary]
  * ├── Attribution
+ * ├── Intro (identity, cyber-risk, URL policy)
+ * ├── # System (permissions, reminders, hooks, context)
  * ├── Core Identity + Capabilities
  * ├── Tool Use Guidelines
  * ├── Actions Section
@@ -98,25 +102,31 @@ export function assembleSystemPrompt(config: SystemPromptConfig): string {
   // 1. Attribution header
   parts.push(getAttributionText(config.isSDK ?? false));
 
-  // 2. Core capabilities
+  // 2. Intro (identity, cyber-risk, URL policy)
+  parts.push(introSection());
+
+  // 3. # System section (permissions, system reminders, hooks, context)
+  parts.push(systemSection());
+
+  // 4. Core capabilities
   parts.push(coreIdentitySection());
 
-  // 3. Tool use guidelines
+  // 5. Tool use guidelines
   parts.push(toolUseGuidelinesSection());
 
-  // 4. Executing actions with care
+  // 6. Executing actions with care
   parts.push(actionsSection());
 
-  // 5. Safety guidelines
+  // 7. Safety guidelines
   parts.push(safetyGuidelinesSection());
 
-  // 6. Doing tasks
+  // 8. Doing tasks
   parts.push(doingTasksSection());
 
-  // 7. Tone & style
+  // 9. Tone & style
   parts.push(toneAndStyleSection());
 
-  // 8. Output efficiency
+  // 10. Output efficiency
   parts.push(outputEfficiencySection());
 
   // ────────────────────────────────────────────────────────────────────────

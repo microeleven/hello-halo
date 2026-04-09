@@ -13,6 +13,7 @@
 import type {
   HookEvent,
   HookCallbackMatcher,
+  HookInput,
 } from '../types/config.js';
 
 // ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ function withTimeout<T>(
 export async function runHooks(
   event: HookEvent,
   matchers: HookCallbackMatcher[] | undefined,
-  input: Record<string, unknown>,
+  input: HookInput | Record<string, unknown>,
   toolUseId: string | undefined,
   signal: AbortSignal,
   toolName?: string,
@@ -132,12 +133,12 @@ export async function runHooks(
 
       try {
         const result = await withTimeout(
-          hook(input, toolUseId, { signal }),
+          hook(input as HookInput, toolUseId, { signal }),
           timeoutMs,
           `${event}${matcher.matcher ? `:${matcher.matcher}` : ''}`,
         );
         if (result && typeof result === 'object') {
-          results.push(result);
+          results.push(result as Record<string, unknown>);
         }
       } catch (err: unknown) {
         // Log but don't propagate hook errors — hooks are advisory
@@ -301,7 +302,7 @@ export async function runPostToolUseFailureHooks(
 export async function runEventHooks(
   hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> | undefined,
   event: HookEvent,
-  input: Record<string, unknown>,
+  input: HookInput | Record<string, unknown>,
   signal: AbortSignal,
 ): Promise<Record<string, unknown>[]> {
   if (!hooks?.[event]) return [];

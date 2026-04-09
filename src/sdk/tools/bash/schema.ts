@@ -42,7 +42,95 @@ export const BASH_TOOL_DESCRIPTION =
   '  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n' +
   '  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n' +
   '  - If you must poll an external process, use a check command (e.g. `gh run view`) rather than sleeping first.\n' +
-  '  - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.';
+  '  - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.\n\n' +
+  '\n# Committing changes with git\n\n' +
+  'Only create commits when requested by the user. If unclear, ask first. When the user asks you to create a new git commit, follow these steps carefully:\n\n' +
+  'You can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance. The numbered steps below indicate which commands should be batched in parallel.\n\n' +
+  'Git Safety Protocol:\n' +
+  '- NEVER update the git config\n' +
+  '- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions. Taking unauthorized destructive actions is unhelpful and can result in lost work, so it\'s best to ONLY run these commands when given direct instructions \n' +
+  '- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it\n' +
+  '- NEVER run force push to main/master, warn the user if they request it\n' +
+  '- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit\n' +
+  '- When staging files, prefer adding specific files by name rather than using "git add -A" or "git add .", which can accidentally include sensitive files (.env, credentials) or large binaries\n' +
+  '- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are being too proactive\n\n' +
+  '1. Run the following bash commands in parallel, each using the Bash tool:\n' +
+  '  - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as it can cause memory issues on large repos.\n' +
+  '  - Run a git diff command to see both staged and unstaged changes that will be committed.\n' +
+  '  - Run a git log command to see recent commit messages, so that you can follow this repository\'s commit message style.\n' +
+  '2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:\n' +
+  '  - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to an existing feature, "fix" means a bug fix, etc.).\n' +
+  '  - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files\n' +
+  '  - Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the "what"\n' +
+  '  - Ensure it accurately reflects the changes and their purpose\n' +
+  '3. Run the following commands in parallel:\n' +
+  '   - Add relevant untracked files to the staging area.\n' +
+  '   - Create the commit with a message ending with:\n' +
+  '   Co-Authored-By: Claude Sonnet 4 <noreply@anthropic.com>\n' +
+  '   - Run git status after the commit completes to verify success.\n' +
+  '   Note: git status depends on the commit completing, so run it sequentially after the commit.\n' +
+  '4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit\n\n' +
+  'Important notes:\n' +
+  '- NEVER run additional commands to read or explore code, besides git bash commands\n' +
+  '- NEVER use the TodoWrite or Agent tools\n' +
+  '- DO NOT push to the remote repository unless the user explicitly asks you to do so\n' +
+  '- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.\n' +
+  '- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a valid option for git rebase.\n' +
+  '- If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit\n' +
+  '- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:\n' +
+  '<example>\n' +
+  'git commit -m "$(cat <<\'EOF\'\n' +
+  '   Commit message here.\n\n' +
+  '   Co-Authored-By: Claude Sonnet 4 <noreply@anthropic.com>\n' +
+  '   EOF\n' +
+  '   )"\n' +
+  '</example>\n\n' +
+  '# Creating pull requests\n' +
+  'Use the gh command via the Bash tool for ALL GitHub-related tasks including working with issues, pull requests, checks, and releases. If given a Github URL use the gh command to get the information needed.\n\n' +
+  'IMPORTANT: When the user asks you to create a pull request, follow these steps carefully:\n\n' +
+  '1. Run the following bash commands in parallel using the Bash tool, in order to understand the current state of the branch since it diverged from the main branch:\n' +
+  '   - Run a git status command to see all untracked files (never use -uall flag)\n' +
+  '   - Run a git diff command to see both staged and unstaged changes that will be committed\n' +
+  '   - Check if the current branch tracks a remote branch and is up to date with the remote, so you know if you need to push to the remote\n' +
+  '   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit history for the current branch (from the time it diverged from the base branch)\n' +
+  '2. Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request!!!), and draft a pull request title and summary:\n' +
+  '   - Keep the PR title short (under 70 characters)\n' +
+  '   - Use the description/body for details, not the title\n' +
+  '3. Run the following commands in parallel:\n' +
+  '   - Create new branch if needed\n' +
+  '   - Push to remote with -u flag if needed\n' +
+  '   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to ensure correct formatting.\n' +
+  '<example>\n' +
+  'gh pr create --title "the pr title" --body "$(cat <<\'EOF\'\n' +
+  '## Summary\n' +
+  '<1-3 bullet points>\n\n' +
+  '## Test plan\n' +
+  '[Bulleted markdown checklist of TODOs for testing the pull request...]\n\n' +
+  '\\ud83e\\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n' +
+  'EOF\n' +
+  ')"\n' +
+  '</example>\n\n' +
+  'Important:\n' +
+  '- DO NOT use the TodoWrite or Agent tools\n' +
+  '- Return the PR URL when you\'re done, so the user can see it\n\n' +
+  '# Other common operations\n' +
+  '- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments\n\n' +
+  '## Command sandbox\n' +
+  'By default, your command will be run in a sandbox when sandboxing is enabled. This sandbox controls which directories and network hosts commands may access or modify without an explicit override.\n\n' +
+  ' - You should always default to running commands within the sandbox. Do NOT attempt to set `dangerouslyDisableSandbox: true` unless:\n' +
+  '  - The user *explicitly* asks you to bypass sandbox\n' +
+  '  - A specific command just failed and you see evidence of sandbox restrictions causing the failure. Note that commands can fail for many reasons unrelated to the sandbox (missing files, wrong arguments, network issues, etc.).\n' +
+  ' - Evidence of sandbox-caused failures includes:\n' +
+  '  - "Operation not permitted" errors for file/network operations\n' +
+  '  - Access denied to specific paths outside allowed directories\n' +
+  '  - Network connection failures to non-whitelisted hosts\n' +
+  '  - Unix socket connection errors\n' +
+  ' - When you see evidence of sandbox-caused failure:\n' +
+  '  - Immediately retry with `dangerouslyDisableSandbox: true` (don\'t ask, just do it)\n' +
+  '  - Briefly explain what sandbox restriction likely caused the failure.\n' +
+  ' - Treat each command you execute with `dangerouslyDisableSandbox: true` individually. Even if you have recently run a command with this setting, you should default to running future commands within the sandbox.\n' +
+  ' - Do not suggest adding sensitive paths like ~/.bashrc, ~/.zshrc, ~/.ssh/*, or credential files to the sandbox allowlist.\n' +
+  ' - For temporary files, always use the `$TMPDIR` environment variable. TMPDIR is automatically set to the correct sandbox-writable directory in sandbox mode. Do NOT use `/tmp` directly - use `$TMPDIR` instead.';
 
 export const BASH_INPUT_SCHEMA = {
   type: 'object',
@@ -72,6 +160,11 @@ export const BASH_INPUT_SCHEMA = {
       type: 'boolean',
       description:
         'Set to true to run this command in the background. Use Read to read the output later.',
+    },
+    dangerouslyDisableSandbox: {
+      type: 'boolean',
+      description:
+        'Set this to true to dangerously override sandbox mode and run commands without sandboxing.',
     },
   },
   required: ['command'],

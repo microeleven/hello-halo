@@ -321,18 +321,63 @@ function createTransportShim(state: SessionState) {
 }
 
 /**
- * Create a query proxy exposing transport and supportedCommands.
- *
- * The consumer accesses `(session as any).query.transport` and
- * `(session as any).query.supportedCommands()`.
+ * Create a query proxy exposing transport, supportedCommands, and all
+ * CC SDK Query control/metadata methods. The consumer accesses these
+ * via `(session as any).query.*`.
  */
 function createQueryProxy(state: SessionState) {
   const transport = createTransportShim(state);
+
   return {
     transport,
+
     /** Return slash commands registered in this session. */
     async supportedCommands(): Promise<SlashCommand[]> {
       return state.slashCommands;
+    },
+
+    /** Return available models from the model registry. */
+    async supportedModels(): Promise<Array<{ value: string; displayName: string; description: string }>> {
+      const { getModelRegistry } = await import('../llm/model-registry.js');
+      const registry = getModelRegistry();
+      return Object.entries(registry).map(([id, info]) => ({
+        value: id,
+        displayName: info.displayName ?? id,
+        description: info.description ?? '',
+      }));
+    },
+
+    /** Return available sub-agents. */
+    async supportedAgents(): Promise<Array<{ name: string; description: string; model?: string }>> {
+      const agents = state.config.agents ?? {};
+      return Object.entries(agents).map(([name, def]) => ({
+        name,
+        description: def.description,
+        model: def.model,
+      }));
+    },
+
+    /** Return MCP server connection statuses. */
+    async mcpServerStatus(): Promise<typeof state.mcpServerStatuses> {
+      return state.mcpServerStatuses;
+    },
+
+    /** Reconnect a named MCP server. */
+    async reconnectMcpServer(serverName: string): Promise<void> {
+      if (state.mcpManager) {
+        await state.mcpManager.restart(serverName);
+      }
+    },
+
+    /** Stop a background task. */
+    async stopTask(taskId: string): Promise<void> {
+      try {
+        const { getAgentRegistry } = await import('../tools/task/list.js');
+        const registry = getAgentRegistry();
+        if (registry) {
+          registry.stop(taskId);
+        }
+      } catch { /* registry not available */ }
     },
   };
 }

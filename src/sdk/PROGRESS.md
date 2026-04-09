@@ -582,6 +582,44 @@ Branch: `feature/sdk`
 
 ---
 
+### Run 28 — Full Query Interface + CC SDK Type Contract + Permission Bypass
+
+**Feature: Complete Query interface matching CC SDK contract (`index.ts`, `core/session.ts`)**
+- Added 16 missing control/metadata methods to the `Query` interface:
+  - `applyFlagSettings`, `initializationResult`, `supportedCommands`, `supportedModels`,
+    `supportedAgents`, `mcpServerStatus`, `getContextUsage`, `reloadPlugins`, `accountInfo`,
+    `rewindFiles`, `seedReadState`, `reconnectMcpServer`, `toggleMcpServer`, `setMcpServers`,
+    `stopTask`, `close`
+- `wrapGeneratorAsQuery` now implements all methods with real or stub behavior
+- Session proxy `createQueryProxy` expanded with `supportedModels()`, `supportedAgents()`,
+  `mcpServerStatus()`, `reconnectMcpServer()`, `stopTask()` — all accessible via `(session as any).query`
+- `getAgentRegistry()` export added to `tools/task/list.ts` for `stopTask` implementation
+
+**Feature: CC SDK types fully aligned (`types/config.ts`)**
+- Added missing types: `ModelInfo`, `AgentInfo`, `AccountInfo`, `RewindFilesResult`,
+  `SDKControlInitializeResponse`, `SDKControlGetContextUsageResponse`, `SDKPermissionDenial`,
+  `ApiKeySource`, `FastModeState`, `ExitReason`
+- Enriched existing types:
+  - `McpServerStatus`: added `scope`, `annotations` on tools (matching CC SDK)
+  - `SlashCommand`: added `argumentHint` field
+  - `ModelRegistryEntry`: added `description`, `supportsEffort`, `supportedEffortLevels`
+- All new types exported from `index.ts`
+
+**Feature: `allowDangerouslySkipPermissions` support (`core/query-loop.ts`)**
+- When `permissionMode === 'bypassPermissions'`, the `canUseTool` callback is skipped entirely
+- Previously the callback was always invoked even in bypass mode
+
+**Enhancement: Model registry enrichment (`llm/model-registry.ts`)**
+- Added `getModelRegistry()` singleton accessor for `Query.supportedModels()`
+- Claude models now include `description`, `supportsEffort`, `supportedEffortLevels`
+
+**Bug fix: unused import (`index.ts`)**
+- Removed dead `readTranscriptMessages` import that caused TS6133
+
+- tsc --noEmit passes
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
@@ -592,3 +630,5 @@ Branch: `feature/sdk`
 - [ ] Worker Thread isolation for background agents (deferred: CC Rust uses Tokio tasks, not threads; our Promise-based approach is equivalent)
 - [ ] Agent progress summaries (agentProgressSummaries fork+summarize every 30s)
 - [x] ~~Typed system subtypes for task_started/task_progress/task_notification in SDKMessage union~~ (Run 22 + Run 25 complete)
+- [ ] Dynamic MCP server management (setMcpServers real implementation)
+- [ ] Elicitation support (typed request/result, onElicitation callback wiring)

@@ -21,11 +21,17 @@ import { CostTracker } from './cost.js';
 import type { ModelUsageEntry } from './cost.js';
 import { TokenBudget } from './token-budget.js';
 import { buildUserMessage, buildToolResultMessage, extractToolUseBlocks } from './messages.js';
-import { microCompact, apiCompact, autoCompactIfNeeded, AutoCompactState, shouldAutoCompact } from './compact.js';
+import { microCompact, apiCompact, autoCompactIfNeeded, fullCompact, AutoCompactState, shouldAutoCompact } from './compact.js';
 import { assembleSystemPrompt, splitAtBoundary } from '../prompt/system-prompt.js';
 import type { SystemPromptConfig } from '../prompt/system-prompt.js';
 import { truncateToolResult } from '../utils/truncate.js';
-import { ProviderError, AbortError } from '../utils/errors.js';
+import { estimateMessageTokens, ApiTokenAnchor } from '../utils/tokens.js';
+import {
+  ProviderError,
+  AbortError,
+  isAbortError,
+  isContextWindowExceededError,
+} from '../utils/errors.js';
 import { sleep, DEFAULT_RETRY, delayForAttempt } from '../utils/retry.js';
 import {
   runPreToolUseHooks,
@@ -168,15 +174,24 @@ export type SDKMessage =
       fast_mode_state?: 'off' | 'cooldown' | 'on';
       uuid: string;
     }
-  // Assistant message
+  // Assistant message — BetaMessage-compatible shape (C3)
   | {
       type: 'assistant';
       /**
-       * BetaMessage-compatible object.  `usage` is nested here so that consumer
-       * code reading `assistantMsg.message?.usage` (CC SDK BetaMessage format) works
-       * correctly.  The top-level `usage` field is kept for SDK-internal use only.
+       * BetaMessage-compatible object matching the official CC SDK contract.
+       * Includes `id`, `type`, `model`, `stop_reason`, `stop_sequence` so
+       * consumer code reading these fields works correctly.
        */
-      message: { role: 'assistant'; content: ContentBlock[]; usage?: UsageInfo };
+      message: {
+        id: string;
+        type: 'message';
+        role: 'assistant';
+        model: string;
+        content: ContentBlock[];
+        stop_reason: string | null;
+        stop_sequence: string | null;
+        usage?: UsageInfo;
+      };
       parent_tool_use_id: string | null;
       uuid: string;
       session_id: string;
@@ -364,6 +379,70 @@ export type SDKMessage =
       session_id: string;
       uuid: string;
     }
+  // Hook started — CC SDK SDKHookStartedMessage (H20)
+  | {
+      type: 'system';
+      subtype: 'hook_started';
+      hook_id: string;
+      hook_name: string;
+      hook_event: string;
+      uuid: string;
+      session_id: string;
+    }
+  // Hook progress — CC SDK SDKHookProgressMessage (H20)
+  | {
+      type: 'system';
+      subtype: 'hook_progress';
+      hook_id: string;
+      hook_name: string;
+      hook_event: string;
+      stdout: string;
+      stderr: string;
+      output: string;
+      uuid: string;
+      session_id: string;
+    }
+  // Hook response — CC SDK SDKHookResponseMessage (H20)
+  | {
+      type: 'system';
+      subtype: 'hook_response';
+      hook_id: string;
+      hook_name: string;
+      hook_event: string;
+      output: string;
+      stdout: string;
+      stderr: string;
+      exit_code?: number;
+      outcome: 'success' | 'error' | 'cancelled';
+      uuid: string;
+      session_id: string;
+    }
+  // Auth status — CC SDK SDKAuthStatusMessage (H20)
+  | {
+      type: 'auth_status';
+      isAuthenticating: boolean;
+      output: string[];
+      error?: string;
+      uuid: string;
+      session_id: string;
+    }
+  // Elicitation complete — CC SDK SDKElicitationCompleteMessage (H20)
+  | {
+      type: 'system';
+      subtype: 'elicitation_complete';
+      mcp_server_name: string;
+      elicitation_id: string;
+      uuid: string;
+      session_id: string;
+    }
+  // Local command output — CC SDK SDKLocalCommandOutputMessage (H20)
+  | {
+      type: 'system';
+      subtype: 'local_command_output';
+      content: string;
+      uuid: string;
+      session_id: string;
+    }
   // Generic system subtype (catch-all for forward compat)
   | {
       type: 'system';
@@ -429,18 +508,64 @@ function buildSystemPrompt(
   return assembleSystemPrompt(promptConfig);
 }
 
-/** Execute a single tool, with error recovery. */
+// ---------------------------------------------------------------------------
+// Tool execution timeout constants (matches Rust implementation)
+// ---------------------------------------------------------------------------
+
+/** Default tool execution timeout in milliseconds (120 seconds). */
+const DEFAULT_TOOL_TIMEOUT_MS = 120_000;
+/** Maximum allowed tool execution timeout in milliseconds (600 seconds). */
+const MAX_TOOL_TIMEOUT_MS = 600_000;
+
+/**
+ * Execute a single tool, with error recovery and a configurable timeout.
+ * Default 120s, max 600s (per the Rust implementation).
+ */
 async function executeTool(
   tool: Tool,
   input: Record<string, unknown>,
   ctx: ToolContext,
   toolResultBudget: number,
+  timeoutMs?: number,
 ): Promise<{ content: string; isError: boolean }> {
+  const effectiveTimeout = Math.min(
+    Math.max(0, timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS),
+    MAX_TOOL_TIMEOUT_MS,
+  );
+
   try {
-    const result = await tool.execute(input, ctx);
+    const result = await Promise.race([
+      tool.execute(input, ctx),
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Tool "${tool.name}" timed out after ${effectiveTimeout / 1000}s`,
+              ),
+            ),
+          effectiveTimeout,
+        );
+        // Clear timer on abort to avoid leaking timers
+        if (ctx.abortSignal) {
+          ctx.abortSignal.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              reject(new AbortError());
+            },
+            { once: true },
+          );
+        }
+      }),
+    ]);
     const content = truncateToolResult(result.content, toolResultBudget);
     return { content, isError: result.isError };
   } catch (err: unknown) {
+    // Re-throw abort errors so the caller's abort detection handles them
+    if (isAbortError(err, ctx.abortSignal)) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     return {
       content: `Tool execution error: ${message}`,
@@ -452,7 +577,7 @@ async function executeTool(
 /** Check if the abort signal has been triggered. */
 function checkAbort(signal: AbortSignal): void {
   if (signal.aborted) {
-    throw new AbortError();
+    throw new AbortError(signal.reason ?? 'Operation was aborted');
   }
 }
 
@@ -606,9 +731,10 @@ async function* accumulateAndStream(
   let msgId = '';
   let msgModel = '';
 
+  let _dbgStreamEventCount = 0;
   for await (const event of stream) {
     if (signal.aborted) {
-      throw new AbortError();
+      throw new AbortError(signal.reason ?? 'Operation was aborted');
     }
 
     // Yield stream event immediately — real-time delivery to consumer.
@@ -623,6 +749,8 @@ async function* accumulateAndStream(
         uuid: randomUUID(),
         session_id: sessionId,
       };
+      _dbgStreamEventCount++;
+      console.log(`[QUERY-LOOP] stream_event#${_dbgStreamEventCount} inner_type=${event.type} t=${Date.now()}`);
       yield streamMsg;
       onProgress?.(streamMsg);
     }
@@ -736,6 +864,7 @@ async function* accumulateAndStream(
     content.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
   }
 
+  console.log(`[QUERY-LOOP] accumulateAndStream done. stopReason=${stopReason} textLen=${textChunks.join('').length} tools=${toolCallBlocks.size} t=${Date.now()}`);
   return { content, usage, stopReason, id: msgId || randomUUID(), model: msgModel };
 }
 
@@ -754,6 +883,17 @@ async function* accumulateAndStream(
  *
  * Yields SDKMessage events for each step.
  */
+/**
+ * Mutable config overrides — written by Query control methods (setModel,
+ * setPermissionMode, setMaxThinkingTokens) and read by the query loop at
+ * the start of each turn so that changes take effect mid-conversation.
+ */
+export interface MutableConfigOverrides {
+  model?: string;
+  permissionMode?: string;
+  maxThinkingTokens?: number | null;
+}
+
 export interface QueryLoopOptions {
   onProgress?: (msg: SDKMessage) => void;
   sessionId?: string;
@@ -763,6 +903,8 @@ export interface QueryLoopOptions {
   slashCommands?: string[];
   /** Skill names available in this session (for init message). */
   skills?: string[];
+  /** Shared mutable overrides written by Query control methods. */
+  configOverrides?: MutableConfigOverrides;
 }
 
 export async function* queryLoop(
@@ -776,6 +918,7 @@ export async function* queryLoop(
   const costTracker = new CostTracker(config.model);
   const compactState = new AutoCompactState();
   const tokenBudget = new TokenBudget(config.model, config.maxTokens);
+  const tokenAnchor = new ApiTokenAnchor();
   const startTime = Date.now();
 
   // Build system prompt
@@ -861,8 +1004,35 @@ export async function* queryLoop(
   // Track permission denials for the result message (CC SDK SDKPermissionDenial[])
   const permissionDenials: Array<{ tool_name: string; tool_use_id: string; tool_input: Record<string, unknown> }> = [];
 
+  // H16: Streaming fallback — after MAX_STREAMING_FAILURES consecutive
+  // streaming-specific errors, fall back to non-streaming API calls.
+  const MAX_STREAMING_FAILURES = 3;
+  let consecutiveStreamingFailures = 0;
+  let useNonStreamingFallback = false;
+
   while (true) {
     turn++;
+
+    // Apply mutable config overrides from Query control methods (C1)
+    const overrides = options?.configOverrides;
+    if (overrides) {
+      if (overrides.model !== undefined) {
+        effectiveModel = overrides.model;
+      }
+      if (overrides.permissionMode !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (config as any).permissionMode = overrides.permissionMode;
+      }
+      if (overrides.maxThinkingTokens !== undefined) {
+        if (overrides.maxThinkingTokens === null || overrides.maxThinkingTokens === 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (config as any).thinking = { type: 'disabled' };
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (config as any).thinking = { type: 'enabled', budgetTokens: overrides.maxThinkingTokens };
+        }
+      }
+    }
 
     // Check abort
     checkAbort(config.abortSignal);
@@ -903,7 +1073,7 @@ export async function* queryLoop(
     }
 
     // Tier 2: API-compact — strip oldest messages if over MAX_INPUT_TOKENS
-    const apiCompacted = apiCompact(messages);
+    const apiCompacted = apiCompact(messages, tokenAnchor);
     if (apiCompacted) {
       messages.length = 0;
       messages.push(...apiCompacted);
@@ -921,43 +1091,90 @@ export async function* queryLoop(
     // Stream LLM response — stream_events are yielded in real-time as tokens arrive.
     // `accumulateAndStream` is a generator: it yields SDKMessage (stream_event) immediately
     // and returns the fully-assembled AccumulatedResponse when the stream ends.
+    //
+    // H16: If streaming has failed consecutively, fall back to non-streaming.
     let accumulated: AccumulatedResponse;
     try {
       // Resolve effort level to thinking/temperature/reasoningEffort
       const resolved = resolveEffort(config.thinking, config.effort);
 
-      const stream = provider.createMessageStream({
-        model: effectiveModel,
-        messages: [...messages],
-        systemPrompt: fullSystemPrompt,
-        tools: toolDefs,
-        maxTokens: config.maxTokens,
-        thinking: resolved.thinking,
-        temperature: resolved.temperature,
-        stream: true,
-        // Always pass AbortSignal so providers cancel in-flight HTTP requests on abort,
-        // and pass reasoning_effort for OpenAI-compat providers when set.
-        providerOptions: {
-          signal: config.abortSignal,
-          ...(resolved.reasoningEffort ? { reasoning_effort: resolved.reasoningEffort } : {}),
-        },
-      });
+      const providerOpts = {
+        signal: config.abortSignal,
+        ...(resolved.reasoningEffort
+          ? { reasoning_effort: resolved.reasoningEffort }
+          : {}),
+      };
 
-      // Delegate to the streaming accumulator — yields stream_events in real-time,
-      // returns AccumulatedResponse when done.
       const apiCallStart = Date.now();
-      accumulated = yield* accumulateAndStream(
-        stream,
-        config.abortSignal,
-        sessionId,
-        config.includePartialMessages,
-        options?.onProgress,
-      );
+
+      if (useNonStreamingFallback) {
+        // H16: Non-streaming fallback — make a single createMessage call
+        const response = await provider.createMessage({
+          model: effectiveModel,
+          messages: [...messages],
+          systemPrompt: fullSystemPrompt,
+          tools: toolDefs,
+          maxTokens: config.maxTokens,
+          thinking: resolved.thinking,
+          temperature: resolved.temperature,
+          stream: false,
+          providerOptions: providerOpts,
+        });
+        accumulated = {
+          content: response.content,
+          usage: response.usage,
+          stopReason: response.stopReason,
+          id: response.id,
+          model: response.model,
+        };
+      } else {
+        const stream = provider.createMessageStream({
+          model: effectiveModel,
+          messages: [...messages],
+          systemPrompt: fullSystemPrompt,
+          tools: toolDefs,
+          maxTokens: config.maxTokens,
+          thinking: resolved.thinking,
+          temperature: resolved.temperature,
+          stream: true,
+          providerOptions: providerOpts,
+        });
+
+        // Delegate to the streaming accumulator — yields stream_events in real-time,
+        // returns AccumulatedResponse when done.
+        accumulated = yield* accumulateAndStream(
+          stream,
+          config.abortSignal,
+          sessionId,
+          config.includePartialMessages,
+          options?.onProgress,
+        );
+      }
       totalApiTimeMs += Date.now() - apiCallStart;
 
-      // Reset retry counter on success
+      // Reset retry counter and streaming failure counter on success
       retryAttempt = 0;
+      consecutiveStreamingFailures = 0;
     } catch (err: unknown) {
+      // H16: Track streaming-specific failures. If the error looks like a
+      // streaming/connection issue (not auth, rate limit, or context overflow),
+      // increment the counter. After MAX_STREAMING_FAILURES, switch to
+      // non-streaming mode and retry immediately.
+      if (
+        !useNonStreamingFallback &&
+        !isAbortError(err, config.abortSignal) &&
+        !isContextWindowExceededError(err) &&
+        !(err instanceof ProviderError && (err.statusCode === 401 || err.statusCode === 403 || err.statusCode === 402))
+      ) {
+        consecutiveStreamingFailures++;
+        if (consecutiveStreamingFailures >= MAX_STREAMING_FAILURES) {
+          useNonStreamingFallback = true;
+          // Retry immediately with non-streaming
+          turn--;
+          continue;
+        }
+      }
+
       // Handle retryable errors
       if (err instanceof ProviderError && err.retryable) {
         // Try fallback model first (no cost)
@@ -997,8 +1214,56 @@ export async function* queryLoop(
         }
       }
 
-      // Handle abort
-      if (err instanceof AbortError || (err instanceof Error && err.name === 'AbortError')) {
+      // C5: Reactive compact — when the API returns context_window_exceeded,
+      // trigger emergency compaction and retry instead of failing fatally.
+      // This is the most critical resilience feature for long conversations.
+      if (
+        isContextWindowExceededError(err) &&
+        !compactState.disabled &&
+        messages.length > 2
+      ) {
+        try {
+          const compactResult = await fullCompact(
+            messages,
+            provider,
+            effectiveModel,
+            systemPrompt,
+          );
+          if (compactResult.messages.length < messages.length) {
+            messages.length = 0;
+            messages.push(...compactResult.messages);
+            compactState.onSuccess();
+            // Reset the token anchor since message history changed
+            tokenAnchor.reset();
+
+            // Emit compact_boundary so consumer sees the compaction
+            const compactMsg: SDKMessage = {
+              type: 'system',
+              subtype: 'compact_boundary',
+              summary: compactResult.summary,
+              compact_metadata: {
+                trigger: 'auto',
+                pre_tokens: tokenAnchor.lastApiTokens || 0,
+              },
+              session_id: sessionId,
+              uuid: randomUUID(),
+            };
+            yield compactMsg;
+            options?.onProgress?.(compactMsg);
+
+            // Retry the turn with compacted context
+            turn--;
+            continue;
+          }
+        } catch {
+          compactState.onFailure();
+          // Fall through to unrecoverable error handling
+        }
+      }
+
+      // Handle abort — detect all variants (our AbortError, Anthropic SDK
+      // APIUserAbortError, DOMException from fetch, signal.aborted)
+      if (isAbortError(err, config.abortSignal)) {
         const resultMsg = buildErrorResult(
           'error_during_execution',
           ['Operation was aborted'],
@@ -1021,9 +1286,14 @@ export async function* queryLoop(
       return;
     }
 
-    // Track costs
+    // Track costs and anchor token counts from API-reported usage
     costTracker.add(accumulated.usage, effectiveModel);
     tokenBudget.updateFromUsage(accumulated.usage.input_tokens);
+    // Anchor the heuristic estimate to API-reported tokens for drift correction
+    tokenAnchor.anchor(
+      accumulated.usage.input_tokens,
+      estimateMessageTokens(messages),
+    );
 
     // Build and push assistant message
     const assistantMessage: Message = {
@@ -1033,13 +1303,22 @@ export async function* queryLoop(
     messages.push(assistantMessage);
 
     // Yield the assistant message.
-    // usage is nested inside `message` (BetaMessage-compatible format) so the
-    // consumer's `assistantMsg.message?.usage` lookup works, and also at the
-    // top level for SDK-internal callers that read `assistantMsg.usage`.
+    // `message` is a BetaMessage-compatible object with id, type, model,
+    // stop_reason, stop_sequence fields so that consumer code reading
+    // `assistantMsg.message.id` / `assistantMsg.message.model` etc. works.
     const assistantUuid = randomUUID();
     const assistantMsg: SDKMessage = {
       type: 'assistant',
-      message: { role: 'assistant', content: accumulated.content, usage: accumulated.usage },
+      message: {
+        id: accumulated.id || `msg_${assistantUuid}`,
+        type: 'message',
+        role: 'assistant',
+        model: accumulated.model || effectiveModel,
+        content: accumulated.content,
+        stop_reason: accumulated.stopReason || null,
+        stop_sequence: null,
+        usage: accumulated.usage,
+      },
       parent_tool_use_id: null,
       uuid: assistantUuid,
       session_id: sessionId,
@@ -1129,6 +1408,7 @@ export async function* queryLoop(
         .map((b) => (b as { type: 'text'; text: string }).text)
         .join('\n');
 
+      console.log(`[QUERY-LOOP] yielding result (success) turn=${turn} stopReason=${accumulated.stopReason} t=${Date.now()}`);
       const resultMsg: SDKMessage = {
         type: 'result',
         subtype: 'success',
@@ -1232,8 +1512,10 @@ export async function* queryLoop(
         Object.assign(toolUse.input, preHookResult.updatedInput);
       }
 
-      // Check canUseTool permission callback (after hooks, so hooks can modify input first)
-      if (config.canUseTool) {
+      // Check canUseTool permission callback (after hooks, so hooks can modify input first).
+      // When bypassPermissions + allowDangerouslySkipPermissions, skip the check entirely.
+      const skipPermissionCheck = config.permissionMode === 'bypassPermissions';
+      if (config.canUseTool && !skipPermissionCheck) {
         try {
           const permResult = await config.canUseTool(toolUse.name, toolUse.input, {
             signal: config.abortSignal,

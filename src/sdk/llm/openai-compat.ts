@@ -374,6 +374,14 @@ export class OpenAiCompatProvider implements LlmProvider {
         const usage = usageVal ? this.parseUsage(usageVal) : undefined;
 
         yield { type: 'message_delta', stopReason, usage };
+
+        // Break immediately after finish_reason — don't wait for [DONE] or
+        // connection close.  Many OpenAI-compat providers (Qwen, DeepSeek, …)
+        // keep the HTTP connection open after the last data chunk without
+        // sending the [DONE] sentinel, which causes parseSSEStream's
+        // reader.read() to hang indefinitely.  This matches the behaviour of
+        // the OpenAI compat router (openai-chat-stream.ts markFinished+break).
+        break;
       }
     }
 

@@ -25,14 +25,24 @@ import { resolveAgentType, type AgentTypeDefinition } from './agent-types.js';
 export interface AgentSpawnRequest {
   description: string;
   prompt: string;
-  tools?: string[];
-  systemPrompt?: string;
-  maxTurns?: number;
+  subagentType?: string;
   model?: string;
-  isolation?: 'worktree';
   runInBackground?: boolean;
+  name?: string;
+  teamName?: string;
+  mode?: string;
+  isolation?: 'worktree';
+  cwd?: string;
   /** Resolved agent type definition (if subagent_type was provided). */
   agentType?: AgentTypeDefinition;
+
+  // --- Backwards-compat: consumed by orchestrator/spawner.ts ---
+  /** @deprecated Use agentType.tools instead. Kept for orchestrator compat. */
+  tools?: string[];
+  /** @deprecated Orchestrator resolves prompt via agentType. Kept for compat. */
+  systemPrompt?: string;
+  /** @deprecated Use Options.maxTurns in the orchestrator. Kept for compat. */
+  maxTurns?: number;
 }
 
 export type AgentSpawner = (
@@ -41,15 +51,24 @@ export type AgentSpawner = (
 ) => Promise<ToolResult>;
 
 let _spawner: AgentSpawner | null = null;
+/** Session ID that owns the current spawner — prevents cross-session leaks. */
+let _spawnerSessionId: string | null = null;
 
 /**
  * Register the real agent spawner implementation.
  * Called by the orchestrator to connect the AgentTool to the
  * actual sub-agent spawning logic.
  * Pass `null` to reset to stub mode.
+ *
+ * @param sessionId - When provided, tags the spawner to a specific session
+ *   so stale spawners from old sessions are not accidentally reused.
  */
-export function setSpawner(spawner: AgentSpawner | null): void {
+export function setSpawner(
+  spawner: AgentSpawner | null,
+  sessionId?: string,
+): void {
   _spawner = spawner;
+  _spawnerSessionId = sessionId ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,17 +103,23 @@ export const AgentTool: Tool = {
     const request: AgentSpawnRequest = {
       description,
       prompt,
-      tools: (input.tools as string[] | undefined) ?? agentType?.tools,
-      systemPrompt: input.system_prompt as string | undefined,
-      maxTurns: input.max_turns as number | undefined,
+      subagentType,
       model: (input.model as string | undefined) ?? agentType?.model,
-      isolation: input.isolation as 'worktree' | undefined,
       runInBackground: input.run_in_background as boolean | undefined,
+      name: input.name as string | undefined,
+      teamName: input.team_name as string | undefined,
+      mode: input.mode as string | undefined,
+      isolation: input.isolation as 'worktree' | undefined,
+      cwd: input.cwd as string | undefined,
       agentType,
     };
 
-    // If a real spawner is registered, use it
+    // If a real spawner is registered, use it.
+    // Validate session ownership to prevent cross-session leaks (H1).
     if (_spawner) {
+      if (_spawnerSessionId && ctx.sessionId && _spawnerSessionId !== ctx.sessionId) {
+        return toolError('Agent spawner belongs to a different session. Re-initialize the orchestrator.');
+      }
       return _spawner(request, ctx);
     }
 

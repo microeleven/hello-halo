@@ -87,6 +87,67 @@ export function estimateMessageTokens(messages: Message[]): number {
 }
 
 // ---------------------------------------------------------------------------
+// API-anchored token tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracks API-reported token counts to calibrate local estimates.
+ *
+ * The heuristic (`chars * 0.75`) drifts over long conversations because it
+ * cannot account for tokenizer specifics, images, caching headers, etc.
+ * When the API reports actual `input_tokens` in its response, we record it
+ * alongside the local estimate at that moment. Subsequent estimates are scaled
+ * by the ratio of API-reported to locally-estimated tokens.
+ *
+ * This is the approach used by CC's tokenBudget.ts — anchor to real API data
+ * when available, fall back to the heuristic otherwise.
+ */
+export class ApiTokenAnchor {
+  /** Last API-reported input token count. */
+  private _apiTokens = 0;
+  /** Local estimate at the time the API count was recorded. */
+  private _localEstimateAtAnchor = 0;
+
+  /** Record an API-reported input token count alongside the current local estimate. */
+  anchor(apiInputTokens: number, localEstimate: number): void {
+    if (apiInputTokens > 0 && localEstimate > 0) {
+      this._apiTokens = apiInputTokens;
+      this._localEstimateAtAnchor = localEstimate;
+    }
+  }
+
+  /**
+   * Return the best available token count for the given messages.
+   * If we have an anchor, scale the current local estimate by the
+   * last-known ratio; otherwise return the raw local estimate.
+   */
+  estimateWithAnchor(messages: Message[]): number {
+    const localEst = estimateMessageTokens(messages);
+    if (this._apiTokens > 0 && this._localEstimateAtAnchor > 0) {
+      const ratio = this._apiTokens / this._localEstimateAtAnchor;
+      return Math.ceil(localEst * ratio);
+    }
+    return localEst;
+  }
+
+  /** Return the last API-reported token count (0 if none recorded). */
+  get lastApiTokens(): number {
+    return this._apiTokens;
+  }
+
+  /** Whether an anchor has been established. */
+  get hasAnchor(): boolean {
+    return this._apiTokens > 0;
+  }
+
+  /** Reset the anchor (e.g. after compaction). */
+  reset(): void {
+    this._apiTokens = 0;
+    this._localEstimateAtAnchor = 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Budget check
 // ---------------------------------------------------------------------------
 

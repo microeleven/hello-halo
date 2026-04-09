@@ -274,10 +274,25 @@ export class AnthropicProvider implements LlmProvider {
 
       // Parse SSE stream and map to StreamEvent
       const signal = request.providerOptions?.signal as AbortSignal | undefined;
+      let _dbgAnthropicEventCount = 0;
       for await (const chunk of parseSSEStream(response, signal)) {
         const event = this.mapAnthropicEvent(chunk);
-        if (event) yield event;
+        if (event) {
+          _dbgAnthropicEventCount++;
+          console.log(`[ANTHROPIC-PROVIDER] event#${_dbgAnthropicEventCount} type=${event.type} t=${Date.now()}`);
+          yield event;
+          // Break immediately after message_stop — don't wait for [DONE] or
+          // connection close. Many OpenAI-compat providers (Qwen, DeepSeek, …)
+          // proxied through the compat router keep the HTTP connection open
+          // after the last SSE chunk without sending the [DONE] sentinel,
+          // causing parseSSEStream to hang indefinitely.
+          if (event.type === 'message_stop') {
+            console.log(`[ANTHROPIC-PROVIDER] message_stop received, returning. total events=${_dbgAnthropicEventCount}`);
+            return;
+          }
+        }
       }
+      console.log(`[ANTHROPIC-PROVIDER] parseSSEStream ended naturally. total events=${_dbgAnthropicEventCount}`);
       return;
     }
 

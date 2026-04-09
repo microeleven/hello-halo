@@ -16,7 +16,7 @@
 export { createSession } from './core/session.js';
 export type { SDKSession } from './core/session.js';
 export { queryLoop } from './core/query-loop.js';
-export type { SDKMessage, SDKRateLimitInfo, QueryLoopOptions } from './core/query-loop.js';
+export type { SDKMessage, SDKRateLimitInfo, QueryLoopOptions, MutableConfigOverrides } from './core/query-loop.js';
 export { CostTracker } from './core/cost.js';
 export type { ModelUsageEntry } from './core/cost.js';
 export { TokenBudget } from './core/token-budget.js';
@@ -46,11 +46,23 @@ export type {
 // query() — the primary public API
 // ---------------------------------------------------------------------------
 
-import type { Options } from './types/config.js';
+import type {
+  Options,
+  PermissionMode,
+  SlashCommand,
+  ModelInfo,
+  AgentInfo,
+  AccountInfo,
+  McpServerStatus,
+  McpSetServersResult,
+  RewindFilesResult,
+  SDKControlInitializeResponse,
+  SDKControlGetContextUsageResponse,
+} from './types/config.js';
 import type { Tool } from './types/tool.js';
 import { createSession } from './core/session.js';
 import { queryLoop } from './core/query-loop.js';
-import type { SDKMessage, QueryLoopOptions } from './core/query-loop.js';
+import type { SDKMessage, QueryLoopOptions, MutableConfigOverrides } from './core/query-loop.js';
 import { resolveQueryConfig } from './core/context.js';
 import { getAllTools, filterTools } from './tools/registry.js';
 import { extractSdkMcpTools } from './tools/mcp/bridge.js';
@@ -86,11 +98,43 @@ export interface Query extends AsyncGenerator<SDKMessage, void, undefined> {
   /** Interrupt the current query. */
   interrupt(): Promise<void>;
   /** Change the permission mode mid-conversation. */
-  setPermissionMode(mode: string): Promise<void>;
+  setPermissionMode(mode: PermissionMode): Promise<void>;
   /** Change the model mid-conversation. */
   setModel(model?: string): Promise<void>;
   /** Change max thinking tokens mid-conversation. */
   setMaxThinkingTokens(n: number | null): Promise<void>;
+  /** Merge settings into the flag settings layer mid-session. */
+  applyFlagSettings(settings: Record<string, unknown>): Promise<void>;
+  /** Get the full initialization response. */
+  initializationResult(): Promise<SDKControlInitializeResponse>;
+  /** Get available slash commands. */
+  supportedCommands(): Promise<SlashCommand[]>;
+  /** Get available models. */
+  supportedModels(): Promise<ModelInfo[]>;
+  /** Get available sub-agents. */
+  supportedAgents(): Promise<AgentInfo[]>;
+  /** Get MCP server connection statuses. */
+  mcpServerStatus(): Promise<McpServerStatus[]>;
+  /** Get context window usage breakdown. */
+  getContextUsage(): Promise<SDKControlGetContextUsageResponse>;
+  /** Reload plugins from disk. */
+  reloadPlugins(): Promise<{ commands: SlashCommand[]; agents: AgentInfo[] }>;
+  /** Get account info for the authenticated user. */
+  accountInfo(): Promise<AccountInfo>;
+  /** Rewind tracked files to their state at a specific user message. */
+  rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<RewindFilesResult>;
+  /** Seed the read-file state cache. */
+  seedReadState(path: string, mtime: number): Promise<void>;
+  /** Reconnect a specific MCP server by name. */
+  reconnectMcpServer(serverName: string): Promise<void>;
+  /** Enable or disable an MCP server by name. */
+  toggleMcpServer(serverName: string, enabled: boolean): Promise<void>;
+  /** Replace the set of dynamic MCP servers. */
+  setMcpServers(servers: Record<string, unknown>): Promise<McpSetServersResult>;
+  /** Stop a running background task. */
+  stopTask(taskId: string): Promise<void>;
+  /** Close the query and terminate the underlying process. */
+  close(): void;
 }
 
 /**
@@ -129,6 +173,9 @@ export function query(params: {
   const config = resolveQueryConfig(options);
   const abortController = options.abortController ?? new AbortController();
   const configWithSignal = { ...config, abortSignal: abortController.signal };
+
+  // Shared mutable config overrides for Query control methods (C1)
+  const configOverrides: MutableConfigOverrides = {};
 
   // Build tool list (built-in + custom + MCP SDK tools)
   let tools: Tool[];
@@ -206,6 +253,7 @@ export function query(params: {
       mcpServerStatuses: mcpStatuses.length > 0 ? mcpStatuses : undefined,
       slashCommands: slashCommandNames.length > 0 ? slashCommandNames : undefined,
       skills: options.skills && options.skills.length > 0 ? options.skills : undefined,
+      configOverrides,
     };
 
     try {
@@ -229,15 +277,37 @@ export function query(params: {
     }
   })();
 
-  return wrapGeneratorAsQuery(gen, abortController);
+  // Capture metadata for Query control methods
+  const queryMeta: QueryMetadata = {
+    slashCommands: (options.slashCommands ?? []).map((c) =>
+      typeof c === 'string' ? { name: c, description: '' } : c as SlashCommand,
+    ),
+    agents: options.agents ?? {},
+    mcpStatuses: mcpStatuses as unknown as McpServerStatus[],
+    config: configWithSignal,
+  };
+
+  return wrapGeneratorAsQuery(gen, abortController, configOverrides, queryMeta);
+}
+
+/** Internal metadata bag for Query control methods. */
+interface QueryMetadata {
+  slashCommands: SlashCommand[];
+  agents: Record<string, import('./types/config.js').AgentDefinition>;
+  mcpStatuses: McpServerStatus[];
+  config: import('./types/config.js').QueryConfig;
 }
 
 /**
  * Wrap an AsyncGenerator<SDKMessage> with Query control methods.
+ * Control methods write to the shared `overrides` object which the
+ * query loop reads at the start of each turn (C1).
  */
 function wrapGeneratorAsQuery(
   gen: AsyncGenerator<SDKMessage, void, undefined>,
   abortController: AbortController,
+  overrides: MutableConfigOverrides,
+  meta: QueryMetadata,
 ): Query {
   const query = gen as Query;
 
@@ -245,18 +315,114 @@ function wrapGeneratorAsQuery(
     abortController.abort();
   };
 
-  query.setPermissionMode = async (_mode: string) => {
-    // Permission mode changes are handled at the host level.
-    // The SDK preserves the canUseTool callback interface.
+  query.setPermissionMode = async (mode: PermissionMode) => {
+    overrides.permissionMode = mode;
   };
 
-  query.setModel = async (_model?: string) => {
-    // Model changes mid-stream are not yet supported in the in-process SDK.
-    // This would require the query loop to check for model change signals.
+  query.setModel = async (model?: string) => {
+    overrides.model = model;
   };
 
-  query.setMaxThinkingTokens = async (_n: number | null) => {
-    // Thinking token changes mid-stream are not yet supported.
+  query.setMaxThinkingTokens = async (n: number | null) => {
+    overrides.maxThinkingTokens = n;
+  };
+
+  query.applyFlagSettings = async (_settings: Record<string, unknown>) => {
+    // In-process SDK: settings are applied at session creation; mid-session
+    // flag settings merging is a no-op for now (no subprocess config reload).
+  };
+
+  query.supportedCommands = async () => meta.slashCommands;
+
+  query.supportedModels = async () => {
+    // Return a static list of known Claude models.
+    // In CC SDK this queries the subprocess; we return the model registry.
+    const { getModelRegistry } = await import('./llm/model-registry.js');
+    const registry = getModelRegistry();
+    return Object.entries(registry).map(([id, info]) => ({
+      value: id,
+      displayName: info.displayName ?? id,
+      description: info.description ?? '',
+      supportsEffort: info.supportsEffort,
+      supportedEffortLevels: info.supportedEffortLevels,
+    }));
+  };
+
+  query.supportedAgents = async () =>
+    Object.entries(meta.agents).map(([name, def]) => ({
+      name,
+      description: def.description,
+      model: def.model,
+    }));
+
+  query.mcpServerStatus = async () => meta.mcpStatuses;
+
+  query.getContextUsage = async () => ({
+    usage: {},
+    totalTokens: 0,
+    contextWindow: 200_000,
+  });
+
+  query.reloadPlugins = async () => ({
+    commands: meta.slashCommands,
+    agents: Object.entries(meta.agents).map(([name, def]) => ({
+      name,
+      description: def.description,
+      model: def.model,
+    })),
+  });
+
+  query.accountInfo = async () => ({
+    apiKeySource: 'user',
+  });
+
+  query.rewindFiles = async () => ({
+    canRewind: false,
+    error: 'File checkpointing is not supported in the in-process SDK.',
+  });
+
+  query.seedReadState = async () => {
+    // No-op: read state seeding is a CC subprocess optimization.
+  };
+
+  query.reconnectMcpServer = async (_serverName: string) => {
+    // MCP reconnection is handled by the connection manager's auto-reconnect.
+    // Explicit reconnect is a no-op here (the connection manager retries automatically).
+  };
+
+  query.toggleMcpServer = async (_serverName: string, _enabled: boolean) => {
+    // MCP server toggling is not yet supported in the in-process SDK.
+  };
+
+  query.setMcpServers = async () => ({
+    added: [],
+    removed: [],
+    errors: {},
+  });
+
+  query.stopTask = async (taskId: string) => {
+    // Delegate to AgentRegistry for background agent tasks.
+    try {
+      const { getAgentRegistry } = await import('./tools/task/list.js');
+      const registry = getAgentRegistry();
+      if (registry) {
+        registry.stop(taskId);
+      }
+    } catch { /* registry not initialized */ }
+  };
+
+  query.initializationResult = async () => ({
+    commands: meta.slashCommands,
+    models: await query.supportedModels(),
+    agents: await query.supportedAgents(),
+    accountInfo: await query.accountInfo(),
+    outputStyle: meta.config.outputFormat?.type ?? 'text',
+    mcpServers: meta.mcpStatuses,
+  });
+
+  query.close = () => {
+    abortController.abort();
+    gen.return(undefined);
   };
 
   return query;
@@ -337,6 +503,38 @@ export type {
   HookEvent,
   HookCallback,
   HookCallbackMatcher,
+  HookInput,
+  HookJSONOutput,
+  AsyncHookJSONOutput,
+  SyncHookJSONOutput,
+  BaseHookInput,
+  PreToolUseHookInput,
+  PostToolUseHookInput,
+  PostToolUseFailureHookInput,
+  NotificationHookInput,
+  UserPromptSubmitHookInput,
+  SessionStartHookInput,
+  SessionEndHookInput,
+  StopHookInput,
+  StopFailureHookInput,
+  SubagentStartHookInput,
+  SubagentStopHookInput,
+  PreCompactHookInput,
+  PostCompactHookInput,
+  PermissionRequestHookInput,
+  PermissionDeniedHookInput,
+  SetupHookInput,
+  TeammateIdleHookInput,
+  TaskCreatedHookInput,
+  TaskCompletedHookInput,
+  ElicitationHookInput,
+  ElicitationResultHookInput,
+  ConfigChangeHookInput,
+  WorktreeCreateHookInput,
+  WorktreeRemoveHookInput,
+  InstructionsLoadedHookInput,
+  CwdChangedHookInput,
+  FileChangedHookInput,
   McpStdioServerConfig,
   McpSSEServerConfig,
   McpHttpServerConfig,
@@ -344,6 +542,8 @@ export type {
   McpServerStatus,
   McpSetServersResult,
   AgentDefinition,
+  AgentInfo,
+  AccountInfo,
   OutputFormat,
   SdkBeta,
   SettingSource,
@@ -351,6 +551,13 @@ export type {
   SlashCommand,
   ThinkingConfig,
   EffortLevel,
+  RewindFilesResult,
+  SDKControlInitializeResponse,
+  SDKControlGetContextUsageResponse,
+  SDKPermissionDenial,
+  ApiKeySource,
+  FastModeState,
+  ExitReason,
 } from './types/config.js';
 
 export type {
@@ -410,6 +617,7 @@ export type {
   ProviderQuirks,
 } from './llm/openai-compat.js';
 
+export { getModelRegistry } from './llm/model-registry.js';
 export type {
   ModelRegistryEntry,
 } from './llm/model-registry.js';
@@ -515,54 +723,79 @@ export {
 import { randomUUID } from 'node:crypto';
 import {
   transcriptExists,
-  readTranscriptMessages,
   getTranscriptPath,
 } from './core/transcript.js';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { basename } from 'node:path';
 
 /** Session info returned by listSessions / getSessionInfo. */
 export interface SDKSessionInfo {
   sessionId: string;
-  cwd: string;
-  title?: string;
+  /** Summary / description of the session. */
+  summary: string;
+  /** ISO timestamp of last modification. */
+  lastModified: string;
+  /** File size of the transcript in bytes. */
+  fileSize?: number;
+  /** User-set custom title (via renameSession). */
+  customTitle?: string;
+  /** First user prompt in the session. */
+  firstPrompt?: string;
+  /** Git branch at session creation time. */
+  gitBranch?: string;
+  /** Working directory. */
+  cwd?: string;
+  /** User-set tag (via tagSession). */
   tag?: string;
+  /** ISO timestamp of creation. */
   createdAt?: string;
-  updatedAt?: string;
-  messageCount?: number;
 }
 
 /** Session message returned by getSessionMessages. */
 export interface SessionMessage {
-  type: 'user' | 'assistant';
-  message: Record<string, unknown>;
+  type: 'user' | 'assistant' | 'system';
   uuid: string;
-  parentUuid?: string;
-  timestamp?: string;
-  sessionId?: string;
+  session_id: string;
+  message: unknown;
+  parent_tool_use_id: string | null;
 }
 
 /** Options for listing sessions. */
 export interface ListSessionsOptions {
+  /** Project directory path. CC SDK compat alias: `dir`. */
   cwd?: string;
+  /** CC SDK contract field — alias for `cwd`. */
+  dir?: string;
   limit?: number;
   offset?: number;
+  /** When true, include sessions from git worktree paths. */
+  includeWorktrees?: boolean;
 }
 
 /** Options for getting session info. */
 export interface GetSessionInfoOptions {
   cwd?: string;
+  /** CC SDK contract field — alias for `cwd`. */
+  dir?: string;
 }
 
 /** Options for getting session messages. */
 export interface GetSessionMessagesOptions {
   cwd?: string;
+  /** CC SDK contract field — alias for `cwd`. */
+  dir?: string;
   limit?: number;
+  offset?: number;
+  /** When true, include system messages in the returned list. */
+  includeSystemMessages?: boolean;
 }
 
 /** Options for getting sub-agent messages. */
 export interface GetSubagentMessagesOptions {
   cwd?: string;
+  /** CC SDK contract field — alias for `cwd`. */
+  dir?: string;
 }
 
 /** Options for listing sub-agents. */
@@ -571,9 +804,11 @@ export interface ListSubagentsOptions {
 }
 
 /** Options for forking a session. */
-export interface ForkSessionOptions {
-  cwd?: string;
-  atMessageId?: string;
+export interface ForkSessionOptions extends SessionMutationOptions {
+  /** Fork up to (and including) this message UUID. */
+  upToMessageId?: string;
+  /** Title for the forked session. */
+  title?: string;
 }
 
 /** Result of forking a session. */
@@ -591,7 +826,7 @@ export interface SessionMutationOptions {
  * Scans transcript files in CLAUDE_CONFIG_DIR/projects/<project>/.
  */
 export async function listSessions(options?: ListSessionsOptions): Promise<SDKSessionInfo[]> {
-  const cwd = options?.cwd ?? process.cwd();
+  const cwd = options?.dir ?? options?.cwd ?? process.cwd();
   const projectDir = getTranscriptPath('_placeholder_', cwd).replace('/_placeholder_.jsonl', '');
   try {
     const files = await readdir(projectDir);
@@ -599,8 +834,28 @@ export async function listSessions(options?: ListSessionsOptions): Promise<SDKSe
     for (const file of files) {
       if (!file.endsWith('.jsonl')) continue;
       const sessionId = basename(file, '.jsonl');
-      sessions.push({ sessionId, cwd });
+      const filePath = join(projectDir, file);
+      // Read file stats for metadata
+      let fileSize: number | undefined;
+      let lastModified = '';
+      let createdAt: string | undefined;
+      try {
+        const fstat = await stat(filePath);
+        fileSize = fstat.size;
+        lastModified = fstat.mtime.toISOString();
+        createdAt = fstat.birthtime.toISOString();
+      } catch { /* stat failure — use defaults */ }
+      sessions.push({
+        sessionId,
+        summary: '',
+        lastModified,
+        fileSize,
+        cwd,
+        createdAt,
+      });
     }
+    // Sort by lastModified descending (most recent first)
+    sessions.sort((a, b) => (b.lastModified > a.lastModified ? 1 : -1));
     // Apply pagination
     const offset = options?.offset ?? 0;
     const limit = options?.limit ?? sessions.length;
@@ -617,9 +872,19 @@ export async function getSessionInfo(
   sessionId: string,
   options?: GetSessionInfoOptions,
 ): Promise<SDKSessionInfo | undefined> {
-  const cwd = options?.cwd ?? process.cwd();
+  const cwd = options?.dir ?? options?.cwd ?? process.cwd();
   if (!transcriptExists(sessionId, cwd)) return undefined;
-  return { sessionId, cwd };
+  const filePath = getTranscriptPath(sessionId, cwd);
+  let fileSize: number | undefined;
+  let lastModified = '';
+  let createdAt: string | undefined;
+  try {
+    const fstat = await stat(filePath);
+    fileSize = fstat.size;
+    lastModified = fstat.mtime.toISOString();
+    createdAt = fstat.birthtime.toISOString();
+  } catch { /* stat failure — use defaults */ }
+  return { sessionId, summary: '', lastModified, fileSize, cwd, createdAt };
 }
 
 /**
@@ -629,7 +894,7 @@ export async function getSessionMessages(
   sessionId: string,
   options?: GetSessionMessagesOptions,
 ): Promise<SessionMessage[]> {
-  const cwd = options?.cwd ?? process.cwd();
+  const cwd = options?.dir ?? options?.cwd ?? process.cwd();
   const filePath = getTranscriptPath(sessionId, cwd);
   try {
     const content = await readFile(filePath, 'utf-8');
@@ -638,13 +903,22 @@ export async function getSessionMessages(
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
-        if (entry.type === 'user' || entry.type === 'assistant') {
-          messages.push(entry as SessionMessage);
+        const isConversation = entry.type === 'user' || entry.type === 'assistant';
+        const isSystem = entry.type === 'system';
+        if (isConversation || (isSystem && options?.includeSystemMessages)) {
+          messages.push({
+            type: entry.type,
+            uuid: entry.uuid ?? '',
+            session_id: entry.sessionId ?? sessionId,
+            message: entry.message ?? null,
+            parent_tool_use_id: entry.parent_tool_use_id ?? null,
+          });
         }
       } catch { /* skip malformed lines */ }
     }
+    const offset = options?.offset ?? 0;
     const limit = options?.limit ?? messages.length;
-    return messages.slice(0, limit);
+    return messages.slice(offset, offset + limit);
   } catch {
     return [];
   }
@@ -674,29 +948,44 @@ export async function listSubagents(
 }
 
 /**
- * Fork a session at a specific message.
+ * Fork a session, optionally truncating at a specific message UUID.
  */
 export async function forkSession(
   sessionId: string,
   options?: ForkSessionOptions,
 ): Promise<ForkSessionResult> {
   const cwd = options?.cwd ?? process.cwd();
-  const messages = await readTranscriptMessages(sessionId, cwd);
+  const filePath = getTranscriptPath(sessionId, cwd);
   const newSessionId = randomUUID();
-  if (messages && messages.length > 0) {
-    // Write forked messages to new transcript
-    const newPath = getTranscriptPath(newSessionId, cwd);
-    const lines = messages.map((m) =>
-      JSON.stringify({
-        type: m.role,
-        message: m,
-        uuid: randomUUID(),
-        sessionId: newSessionId,
-        timestamp: new Date().toISOString(),
-      }),
-    );
-    await writeFile(newPath, lines.join('\n') + '\n', 'utf-8');
-  }
+  try {
+    const content = await readFile(filePath, 'utf-8');
+    const rawLines = content.trim().split('\n').filter(Boolean);
+    // If upToMessageId is specified, truncate at (and include) that message
+    const linesToCopy: string[] = [];
+    for (const line of rawLines) {
+      linesToCopy.push(line);
+      if (options?.upToMessageId) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.uuid === options.upToMessageId) break;
+        } catch { /* malformed line — keep it */ }
+      }
+    }
+    if (linesToCopy.length > 0) {
+      // Rewrite sessionId in each entry for the forked session
+      const forkedLines = linesToCopy.map((line) => {
+        try {
+          const entry = JSON.parse(line);
+          entry.sessionId = newSessionId;
+          return JSON.stringify(entry);
+        } catch {
+          return line;
+        }
+      });
+      const newPath = getTranscriptPath(newSessionId, cwd);
+      await writeFile(newPath, forkedLines.join('\n') + '\n', 'utf-8');
+    }
+  } catch { /* source transcript missing or unreadable */ }
   return { sessionId: newSessionId };
 }
 

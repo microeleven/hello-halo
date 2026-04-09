@@ -14,6 +14,8 @@ export interface ModelRegistryEntry {
   id: string;
   /** Human-readable display name (e.g. "Claude Sonnet 4.6") */
   displayName: string;
+  /** Short description of model capabilities. */
+  description?: string;
   /** Provider identifier (e.g. "anthropic", "openai", "deepseek") */
   provider: string;
   /** Total context window size in tokens */
@@ -22,6 +24,10 @@ export interface ModelRegistryEntry {
   maxOutputTokens: number;
   /** Supports extended thinking / chain-of-thought */
   supportsThinking: boolean;
+  /** Whether this model supports effort levels. */
+  supportsEffort?: boolean;
+  /** Available effort levels for this model. */
+  supportedEffortLevels?: Array<'low' | 'medium' | 'high' | 'max'>;
   /** Accepts image inputs */
   supportsImages: boolean;
   /** Accepts PDF document inputs */
@@ -113,10 +119,13 @@ export function getDefaultRegistry(): ModelRegistry {
   registry.register({
     id: 'claude-sonnet-4-6',
     displayName: 'Claude Sonnet 4.6',
+    description: 'Fast, intelligent model for everyday coding tasks.',
     provider: 'anthropic',
     contextWindow: 200_000,
     maxOutputTokens: 16_384,
     supportsThinking: true,
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'max'],
     supportsImages: true,
     supportsPdf: true,
     supportsCaching: true,
@@ -128,10 +137,13 @@ export function getDefaultRegistry(): ModelRegistry {
   registry.register({
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
+    description: 'Most capable model for complex reasoning and analysis.',
     provider: 'anthropic',
     contextWindow: 200_000,
     maxOutputTokens: 16_384,
     supportsThinking: true,
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high', 'max'],
     supportsImages: true,
     supportsPdf: true,
     supportsCaching: true,
@@ -143,10 +155,13 @@ export function getDefaultRegistry(): ModelRegistry {
   registry.register({
     id: 'claude-haiku-3-5',
     displayName: 'Claude Haiku 3.5',
+    description: 'Fastest model for simple tasks and quick interactions.',
     provider: 'anthropic',
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
     supportsThinking: true,
+    supportsEffort: true,
+    supportedEffortLevels: ['low', 'medium', 'high'],
     supportsImages: true,
     supportsPdf: true,
     supportsCaching: true,
@@ -219,4 +234,25 @@ export function getDefaultRegistry(): ModelRegistry {
   });
 
   return registry;
+}
+
+// ---------------------------------------------------------------------------
+// Singleton accessor for Query.supportedModels()
+// ---------------------------------------------------------------------------
+
+let _singleton: ModelRegistry | null = null;
+
+/**
+ * Get the module-level singleton model registry.
+ * Lazily initialized on first call via getDefaultRegistry().
+ */
+export function getModelRegistry(): Record<string, ModelRegistryEntry> {
+  if (!_singleton) {
+    _singleton = getDefaultRegistry();
+  }
+  const result: Record<string, ModelRegistryEntry> = {};
+  for (const entry of _singleton.listModels()) {
+    result[entry.id] = entry;
+  }
+  return result;
 }
