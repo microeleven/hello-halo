@@ -136,12 +136,13 @@ interface SessionState {
  */
 export async function createSession(options: Options): Promise<SDKSession> {
   const env = options.env as Record<string, string | undefined> | undefined;
-  const apiKey = env?.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  const baseUrl = env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL;
+  // Support CC SDK compat fields: options.apiKey / options.anthropicBaseUrl
+  const apiKey = options.apiKey ?? env?.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  const baseUrl = options.anthropicBaseUrl ?? env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL;
   const provider = options.provider ?? (
     apiKey
       ? new AnthropicProvider({ apiKey, baseUrl })
-      : (() => { throw new Error('createSession() requires options.provider or ANTHROPIC_API_KEY in options.env / process.env.'); })()
+      : (() => { throw new Error('createSession() requires options.provider, options.apiKey, or ANTHROPIC_API_KEY in env.'); })()
   );
 
   const config = resolveQueryConfig(options);

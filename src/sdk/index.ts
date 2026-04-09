@@ -65,11 +65,12 @@ import { AnthropicProvider } from './llm/anthropic.js';
 function resolveProvider(options: Options) {
   if (options.provider) return options.provider;
   const env = options.env as Record<string, string | undefined> | undefined;
-  const apiKey = env?.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  const baseUrl = env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL;
+  // Support CC SDK compat fields: options.apiKey / options.anthropicBaseUrl
+  const apiKey = options.apiKey ?? env?.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  const baseUrl = options.anthropicBaseUrl ?? env?.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL;
   if (!apiKey) {
     throw new Error(
-      'query() requires options.provider or ANTHROPIC_API_KEY in options.env / process.env.',
+      'query() requires options.provider, options.apiKey, or ANTHROPIC_API_KEY in env.',
     );
   }
   return new AnthropicProvider({ apiKey, baseUrl });
@@ -300,6 +301,11 @@ export type {
   QueryConfig,
   AgentContext,
   PermissionMode,
+  PermissionBehavior,
+  PermissionDecisionClassification,
+  PermissionUpdate,
+  PermissionUpdateDestination,
+  PermissionRuleValue,
   CanUseTool,
   PermissionResult,
   HookEvent,

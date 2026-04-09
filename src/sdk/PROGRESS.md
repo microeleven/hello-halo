@@ -460,6 +460,52 @@ Branch: `feature/sdk`
 
 ---
 
+### Run 25 — CC SDK Type Contract Alignment
+
+**Type system: full alignment with CC SDK `sdk-types.ts` contract**
+
+- **`Options` type enrichment** (`types/config.ts`):
+  - Added CC SDK compat aliases: `apiKey`, `anthropicBaseUrl` at the top level
+  - The consumer's `mcp-manager.ts` passes these fields via CC SDK options format — our SDK
+    now resolves them alongside `env.ANTHROPIC_API_KEY` / `env.ANTHROPIC_BASE_URL`
+  - Added missing fields: `promptSuggestions`, `agentProgressSummaries`, `sandbox`, `settings`,
+    `settingSources`, `debug`, `debugFile`, `onElicitation`, `plugins`
+
+- **`CanUseTool` callback expanded** (`types/config.ts`):
+  - Added all missing options from CC SDK: `suggestions`, `blockedPath`, `decisionReason`,
+    `title`, `displayName`, `description` (6 new fields)
+  - These fields are passed through to the consumer's permission handler for richer UI
+
+- **`PermissionResult` expanded** (`types/config.ts`):
+  - Added `updatedPermissions`, `toolUseID`, `decisionClassification` to both `allow` and `deny` variants
+  - Added `PermissionDecisionClassification`, `PermissionBehavior`, `PermissionUpdate`,
+    `PermissionUpdateDestination`, `PermissionRuleValue` types — full permission system vocabulary
+
+- **`HookEvent` expanded** (`types/config.ts`):
+  - Added 15 missing hook event types: `StopFailure`, `PermissionRequest`, `PermissionDenied`,
+    `Setup`, `TeammateIdle`, `TaskCreated`, `TaskCompleted`, `Elicitation`, `ElicitationResult`,
+    `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`
+
+- **`AgentDefinition` expanded** (`types/config.ts`):
+  - Added missing fields: `criticalSystemReminder_EXPERIMENTAL`, `skills`, `initialPrompt`,
+    `memory`, `effort` (6 new fields matching CC SDK contract)
+
+- **`SDKMessage` type union expanded** (`core/query-loop.ts`):
+  - Added `fast_mode_state?` field to init message, success result, and error result types
+  - Added `structured_output?` and `deferred_tool_use?` fields to success result type
+  - Added `error_max_structured_output_retries` to error result subtype union
+  - Added 6 new message type variants: `task_started`, `task_progress`, `task_notification`,
+    `tool_use_summary`, `rate_limit_event`, `prompt_suggestion`, `files_persisted`
+  - Added generic `system` catch-all variant for forward compatibility
+
+- **Provider resolution** (`core/session.ts`, `index.ts`):
+  - Both `createSession()` and `query()` now resolve `options.apiKey` and `options.anthropicBaseUrl`
+    before falling back to env vars — enables zero-change consumption by `mcp-manager.ts`
+
+- tsc --noEmit passes
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
@@ -469,4 +515,4 @@ Branch: `feature/sdk`
 - [x] ~~WebSearchTool real implementation~~ (Run 20)
 - [ ] Worker Thread isolation for background agents (deferred: CC Rust uses Tokio tasks, not threads; our Promise-based approach is equivalent)
 - [ ] Agent progress summaries (agentProgressSummaries fork+summarize every 30s)
-- [x] ~~Typed system subtypes for task_started/task_progress/task_notification in SDKMessage union~~ (partially — session_state_changed added Run 22)
+- [x] ~~Typed system subtypes for task_started/task_progress/task_notification in SDKMessage union~~ (Run 22 + Run 25 complete)

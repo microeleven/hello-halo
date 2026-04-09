@@ -24,20 +24,85 @@ export type PermissionMode =
 // CanUseTool callback
 // ---------------------------------------------------------------------------
 
+/**
+ * Classification of a permission decision for telemetry.
+ * SDK hosts that prompt users should set this to reflect what happened:
+ *   - user_temporary for allow-once
+ *   - user_permanent for always-allow (both the click and later cache hits)
+ *   - user_reject for deny
+ */
+export type PermissionDecisionClassification =
+  | 'user_temporary'
+  | 'user_permanent'
+  | 'user_reject';
+
+/**
+ * A suggested permission update that can be returned as part of a PermissionResult
+ * to persistently change permission rules so the user is not prompted again.
+ */
+export type PermissionBehavior = 'allow' | 'deny' | 'ask';
+
+export type PermissionUpdateDestination =
+  | 'userSettings'
+  | 'projectSettings'
+  | 'localSettings'
+  | 'session'
+  | 'cliArg';
+
+export type PermissionRuleValue = {
+  toolName: string;
+  ruleContent?: string;
+};
+
+export type PermissionUpdate =
+  | { type: 'addRules'; rules: PermissionRuleValue[]; behavior: PermissionBehavior; destination: PermissionUpdateDestination }
+  | { type: 'replaceRules'; rules: PermissionRuleValue[]; behavior: PermissionBehavior; destination: PermissionUpdateDestination }
+  | { type: 'removeRules'; rules: PermissionRuleValue[]; behavior: PermissionBehavior; destination: PermissionUpdateDestination }
+  | { type: 'setMode'; mode: PermissionMode; destination: PermissionUpdateDestination }
+  | { type: 'addDirectories'; directories: string[]; destination: PermissionUpdateDestination }
+  | { type: 'removeDirectories'; directories: string[]; destination: PermissionUpdateDestination };
+
 /** Permission callback function for controlling tool usage. */
 export type CanUseTool = (
   toolName: string,
   input: Record<string, unknown>,
   options: {
+    /** Signaled if the operation should be aborted. */
     signal: AbortSignal;
+    /** Suggestions for updating permissions so the user will not be prompted again. */
+    suggestions?: PermissionUpdate[];
+    /** The file path that triggered the permission request, if applicable. */
+    blockedPath?: string;
+    /** Explains why this permission request was triggered. */
+    decisionReason?: string;
+    /** Full permission prompt sentence rendered by the bridge. */
+    title?: string;
+    /** Short noun phrase for the tool action (e.g. "Read file"). */
+    displayName?: string;
+    /** Human-readable subtitle from the bridge. */
+    description?: string;
+    /** Unique identifier for this specific tool call. */
     toolUseID: string;
+    /** If running within a sub-agent, the sub-agent's ID. */
     agentID?: string;
   },
 ) => Promise<PermissionResult>;
 
 export type PermissionResult =
-  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-  | { behavior: 'deny'; message?: string; interrupt?: boolean };
+  | {
+      behavior: 'allow';
+      updatedInput?: Record<string, unknown>;
+      updatedPermissions?: PermissionUpdate[];
+      toolUseID?: string;
+      decisionClassification?: PermissionDecisionClassification;
+    }
+  | {
+      behavior: 'deny';
+      message?: string;
+      interrupt?: boolean;
+      toolUseID?: string;
+      decisionClassification?: PermissionDecisionClassification;
+    };
 
 // ---------------------------------------------------------------------------
 // HookEvent system (simplified — SDK preserves callback interface)
@@ -52,10 +117,25 @@ export type HookEvent =
   | 'SessionStart'
   | 'SessionEnd'
   | 'Stop'
+  | 'StopFailure'
   | 'SubagentStart'
   | 'SubagentStop'
   | 'PreCompact'
-  | 'PostCompact';
+  | 'PostCompact'
+  | 'PermissionRequest'
+  | 'PermissionDenied'
+  | 'Setup'
+  | 'TeammateIdle'
+  | 'TaskCreated'
+  | 'TaskCompleted'
+  | 'Elicitation'
+  | 'ElicitationResult'
+  | 'ConfigChange'
+  | 'WorktreeCreate'
+  | 'WorktreeRemove'
+  | 'InstructionsLoaded'
+  | 'CwdChanged'
+  | 'FileChanged';
 
 export type HookCallback = (
   input: Record<string, unknown>,
@@ -143,10 +223,20 @@ export interface AgentDefinition {
   model?: string;
   /** MCP servers for this agent */
   mcpServers?: Array<string | Record<string, McpServerConfig>>;
+  /** Critical reminder added to system prompt */
+  criticalSystemReminder_EXPERIMENTAL?: string;
+  /** Skill names to preload into the agent context */
+  skills?: string[];
+  /** Auto-submitted as the first user turn for main-thread agents */
+  initialPrompt?: string;
   /** Maximum agentic turns */
   maxTurns?: number;
   /** Run as background task */
   background?: boolean;
+  /** Agent memory scope */
+  memory?: 'user' | 'project' | 'local';
+  /** Reasoning effort level */
+  effort?: EffortLevel | number;
   /** Permission mode */
   permissionMode?: PermissionMode;
 }
@@ -287,14 +377,34 @@ export interface Options {
   sessionId?: string;
   /** Resume up to a specific message */
   resumeSessionAt?: string;
-  /** Settings sources to load */
-  settingSources?: SettingSource[];
   /** Stderr callback */
   stderr?: (data: string) => void;
   /** Strict MCP config validation */
   strictMcpConfig?: boolean;
   /** System prompt configuration */
   systemPrompt?: string | { type: 'preset'; preset: 'claude_code'; append?: string };
+
+  /** Enable prompt suggestions after each turn. */
+  promptSuggestions?: boolean;
+  /** Enable periodic AI-generated progress summaries for subagents. */
+  agentProgressSummaries?: boolean;
+  /** Sandbox settings for command execution isolation. */
+  sandbox?: Record<string, unknown>;
+  /** Additional settings (path to JSON or inline object). */
+  settings?: string | Record<string, unknown>;
+  /** Control which filesystem settings to load. */
+  settingSources?: SettingSource[];
+  /** Enable debug mode. */
+  debug?: boolean;
+  /** Write debug logs to a specific file path. */
+  debugFile?: string;
+  /** Callback for handling MCP elicitation requests. */
+  onElicitation?: (
+    request: Record<string, unknown>,
+    options: { signal: AbortSignal },
+  ) => Promise<Record<string, unknown>>;
+  /** Plugins to load for this session. */
+  plugins?: Array<{ type: string; path: string }>;
 
   // --- Agent-Core SDK extensions (superset) ---
 
@@ -316,6 +426,21 @@ export interface Options {
   executableArgs?: string[];
   /** Additional CLI arguments (ignored in-process). */
   extraArgs?: Record<string, string | null>;
+
+  // --- CC SDK compatibility aliases ---
+  // These fields allow CC SDK options objects (with apiKey/anthropicBaseUrl
+  // at the top level) to be passed directly to the in-process SDK.
+
+  /**
+   * Anthropic API key. CC SDK compat alias — the in-process SDK reads this
+   * and creates a provider automatically. Equivalent to env.ANTHROPIC_API_KEY.
+   */
+  apiKey?: string;
+  /**
+   * Anthropic API base URL. CC SDK compat alias.
+   * Equivalent to env.ANTHROPIC_BASE_URL.
+   */
+  anthropicBaseUrl?: string;
 }
 
 // ---------------------------------------------------------------------------

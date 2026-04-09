@@ -165,6 +165,7 @@ export type SDKMessage =
       betas?: string[];
       output_style: string;
       plugins: Array<{ name: string; path: string }>;
+      fast_mode_state?: 'off' | 'cooldown' | 'on';
       uuid: string;
     }
   // Assistant message
@@ -213,12 +214,15 @@ export type SDKMessage =
       duration_ms: number;
       duration_api_ms: number;
       permission_denials: Array<{ tool_name: string; tool_use_id: string; tool_input: Record<string, unknown> }>;
+      structured_output?: unknown;
+      deferred_tool_use?: { tool_use_id: string; tool_name: string; tool_input: Record<string, unknown> };
+      fast_mode_state?: 'off' | 'cooldown' | 'on';
       uuid: string;
     }
   // Result — error
   | {
       type: 'result';
-      subtype: 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd';
+      subtype: 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries';
       /** Error details as individual messages (CC SDK canonical field). */
       errors: string[];
       /** Joined error text for consumer compat (consumer reads `message.result`). */
@@ -233,6 +237,7 @@ export type SDKMessage =
       duration_ms: number;
       duration_api_ms: number;
       permission_denials: Array<{ tool_name: string; tool_use_id: string; tool_input: Record<string, unknown> }>;
+      fast_mode_state?: 'off' | 'cooldown' | 'on';
       uuid: string;
     }
   // Tool progress
@@ -287,6 +292,92 @@ export type SDKMessage =
       state: 'idle' | 'running' | 'requires_action';
       session_id: string;
       uuid: string;
+    }
+  // System — task started (sub-agent spawned)
+  | {
+      type: 'system';
+      subtype: 'task_started';
+      task_id: string;
+      tool_use_id?: string;
+      description: string;
+      task_type?: string;
+      workflow_name?: string;
+      prompt?: string;
+      session_id: string;
+      uuid: string;
+    }
+  // System — task progress (sub-agent turn completed)
+  | {
+      type: 'system';
+      subtype: 'task_progress';
+      task_id: string;
+      tool_use_id?: string;
+      description: string;
+      usage: { total_tokens: number; tool_uses: number; duration_ms: number };
+      last_tool_name?: string;
+      summary?: string;
+      session_id: string;
+      uuid: string;
+    }
+  // System — task notification (sub-agent completed/failed/stopped)
+  | {
+      type: 'system';
+      subtype: 'task_notification';
+      task_id: string;
+      tool_use_id?: string;
+      status: 'completed' | 'failed' | 'stopped';
+      output_file: string;
+      summary: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      session_id: string;
+      uuid: string;
+    }
+  // Tool use summary
+  | {
+      type: 'tool_use_summary';
+      summary: string;
+      preceding_tool_use_ids: string[];
+      session_id: string;
+      uuid: string;
+    }
+  // Rate limit event
+  | {
+      type: 'system';
+      subtype: 'rate_limit_event';
+      rate_limit_info: {
+        requests_limit?: number;
+        requests_remaining?: number;
+        requests_reset?: string;
+        tokens_limit?: number;
+        tokens_remaining?: number;
+        tokens_reset?: string;
+      };
+      session_id: string;
+      uuid: string;
+    }
+  // Prompt suggestion (after result)
+  | {
+      type: 'system';
+      subtype: 'prompt_suggestion';
+      suggestion: string;
+      session_id: string;
+      uuid: string;
+    }
+  // Files persisted event
+  | {
+      type: 'system';
+      subtype: 'files_persisted';
+      files: string[];
+      session_id: string;
+      uuid: string;
+    }
+  // Generic system subtype (catch-all for forward compat)
+  | {
+      type: 'system';
+      subtype: string;
+      session_id: string;
+      uuid: string;
+      [key: string]: unknown;
     };
 
 // ---------------------------------------------------------------------------
@@ -691,7 +782,7 @@ export async function* queryLoop(
 
   /** Helper to build an error result message. */
   function buildErrorResult(
-    subtype: 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd',
+    subtype: 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries',
     errors: string[],
     numTurns: number,
     stopReason: string | null = null,
