@@ -48,6 +48,7 @@ export function resolveQueryConfig(options: Options): QueryConfig {
     effort: options.effort ?? 'high',
     toolResultBudget: options.toolResultBudget ?? DEFAULT_TOOL_RESULT_BUDGET,
     includePartialMessages: options.includePartialMessages ?? false,
+    permissionMode: options.permissionMode ?? 'default',
     allowedTools: options.allowedTools,
     disallowedTools: options.disallowedTools,
     agents: options.agents,

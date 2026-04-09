@@ -329,6 +329,7 @@ export interface QueryConfig {
   effort: EffortLevel;
   toolResultBudget: number;
   includePartialMessages: boolean;
+  permissionMode: PermissionMode;
   allowedTools?: string[];
   disallowedTools?: string[];
   agents?: Record<string, AgentDefinition>;

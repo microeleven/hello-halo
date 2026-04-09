@@ -41,6 +41,29 @@ import type { EffortLevel, ThinkingConfig as CfgThinkingConfig } from '../types/
 import type { ThinkingConfig } from '../types/provider.js';
 
 // ---------------------------------------------------------------------------
+// SDK version constant (matches package.json)
+// ---------------------------------------------------------------------------
+
+const SDK_VERSION = '1.0.0';
+
+// ---------------------------------------------------------------------------
+// API key source detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine how the API key was provided, reported in the init message.
+ * CC SDK uses: 'user' | 'project' | 'org' | 'temporary' | 'oauth'.
+ * Our SDK only supports env-based keys, so we classify by env var name.
+ */
+function resolveApiKeySource(
+  env: Record<string, string | undefined>,
+): string {
+  if (env.ANTHROPIC_API_KEY) return 'user';
+  if (process.env.ANTHROPIC_API_KEY) return 'user';
+  return 'user';
+}
+
+// ---------------------------------------------------------------------------
 // Effort level → provider parameters resolution
 // ---------------------------------------------------------------------------
 
@@ -124,19 +147,24 @@ function resolveEffort(
  * compatibility with consumer code (hello-halo, agent-workspace-backend, etc.).
  */
 export type SDKMessage =
-  // System init
+  // System init — CC SDK SDKSystemMessage
   | {
       type: 'system';
       subtype: 'init';
       session_id: string;
       tools: string[];
       model: string;
-      mcp_servers?: Array<{ name: string; status: string }>;
-      cwd?: string;
-      permissionMode?: string;
-      slash_commands?: string[];
-      skills?: string[];
+      cwd: string;
+      permissionMode: string;
+      mcp_servers: Array<{ name: string; status: string }>;
+      slash_commands: string[];
+      skills: string[];
       agents?: string[];
+      apiKeySource: string;
+      claude_code_version: string;
+      betas?: string[];
+      output_style: string;
+      plugins: Array<{ name: string; path: string }>;
       uuid: string;
     }
   // Assistant message
@@ -249,6 +277,14 @@ export type SDKMessage =
       retry_delay_ms: number;
       error_status: number | null;
       error: 'authentication_failed' | 'billing_error' | 'rate_limit' | 'invalid_request' | 'server_error' | 'unknown' | 'max_output_tokens';
+      session_id: string;
+      uuid: string;
+    }
+  // System — session state changed (idle/running/requires_action)
+  | {
+      type: 'system';
+      subtype: 'session_state_changed';
+      state: 'idle' | 'running' | 'requires_action';
       session_id: string;
       uuid: string;
     };
@@ -627,7 +663,10 @@ export async function* queryLoop(
     ? Object.keys(config.agents)
     : undefined;
 
-  // Yield init event
+  // Determine API key source for init message
+  const apiKeySource = resolveApiKeySource(config.env);
+
+  // Yield init event (CC SDK SDKSystemMessage shape)
   const initMsg: SDKMessage = {
     type: 'system',
     subtype: 'init',
@@ -635,10 +674,16 @@ export async function* queryLoop(
     tools: tools.map((t) => t.name),
     model: config.model,
     cwd: config.cwd,
+    permissionMode: config.permissionMode,
+    mcp_servers: options?.mcpServerStatuses ?? [],
+    slash_commands: options?.slashCommands ?? [],
+    skills: options?.skills ?? [],
     agents: agentNames,
-    mcp_servers: options?.mcpServerStatuses,
-    slash_commands: options?.slashCommands,
-    skills: options?.skills,
+    apiKeySource,
+    claude_code_version: SDK_VERSION,
+    betas: config.betas,
+    output_style: config.outputFormat?.type ?? 'text',
+    plugins: [],
     uuid: randomUUID(),
   };
   yield initMsg;

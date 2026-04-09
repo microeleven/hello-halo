@@ -494,6 +494,15 @@ function createSessionProxy(state: SessionState): SDKSession {
 
       if (state.closed) return;
 
+      // Emit session_state_changed: running
+      yield {
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'running',
+        session_id: state.sessionId,
+        uuid: randomUUID(),
+      } as SDKMessage;
+
       // Drain all pending messages.
       // Payloads can be strings or Message objects (multi-modal).
       const pendingPayloads: Array<string | Message> = [];
@@ -593,6 +602,17 @@ function createSessionProxy(state: SessionState): SDKSession {
 
         yield msg;
       }
+
+      // Emit session_state_changed: idle (turn complete)
+      if (!state.closed) {
+        yield {
+          type: 'system',
+          subtype: 'session_state_changed',
+          state: 'idle',
+          session_id: state.sessionId,
+          uuid: randomUUID(),
+        } as SDKMessage;
+      }
   }
 
   session.close = function close(): void {
@@ -664,10 +684,9 @@ function createSessionProxy(state: SessionState): SDKSession {
   };
 
   session.setPermissionMode = async function setPermissionMode(
-    _mode: PermissionMode,
+    mode: PermissionMode,
   ): Promise<void> {
-    // Permission mode is handled by the canUseTool callback.
-    // The SDK preserves the callback interface.
+    state.config = { ...state.config, permissionMode: mode };
   };
 
   Object.defineProperty(session, Symbol.asyncDispose, {

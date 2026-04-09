@@ -373,6 +373,36 @@ Branch: `feature/sdk`
 
 ---
 
+### Run 22 — Init Message Enrichment + permissionMode + session_state_changed
+
+**Enhancement: init message now matches CC SDK `SDKSystemMessage` contract**
+- Added all required fields from the CC SDK type definition:
+  - `apiKeySource: string` — detected from env vars (defaults to `'user'`)
+  - `claude_code_version: string` — SDK version from `SDK_VERSION` constant
+  - `output_style: string` — derived from `config.outputFormat?.type ?? 'text'`
+  - `plugins: Array<{ name, path }>` — always `[]` (plugins not yet supported)
+  - `betas?: string[]` — forwarded from `config.betas`
+- Changed optional fields to required (matching CC SDK contract):
+  - `cwd`, `permissionMode`, `mcp_servers`, `slash_commands`, `skills` are now always present
+  - Empty arrays instead of `undefined` when no values are configured
+  
+**Enhancement: `permissionMode` propagation through the system**
+- Added `permissionMode: PermissionMode` to `QueryConfig` (was missing)
+- `resolveQueryConfig()` now reads `options.permissionMode ?? 'default'`
+- Init message populates `permissionMode` from resolved config
+- `session.setPermissionMode()` now actually updates `state.config.permissionMode`
+  (was previously a no-op; now consumer-visible in subsequent turns)
+
+**Feature: `session_state_changed` SDKMessage variant**
+- Added new SDKMessage union member: `{ type: 'system', subtype: 'session_state_changed', state: 'idle' | 'running' | 'requires_action' }`
+- Session `stream()` emits `state: 'running'` when processing starts
+- Session `stream()` emits `state: 'idle'` after query loop completes
+- Matches CC SDK `SDKSessionStateChangedMessage` — authoritative turn-over signal
+
+- tsc --noEmit passes
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
@@ -382,4 +412,4 @@ Branch: `feature/sdk`
 - [x] ~~WebSearchTool real implementation~~ (Run 20)
 - [ ] Worker Thread isolation for background agents (deferred: CC Rust uses Tokio tasks, not threads; our Promise-based approach is equivalent)
 - [ ] Agent progress summaries (agentProgressSummaries fork+summarize every 30s)
-- [ ] Typed system subtypes for task_started/task_progress/task_notification in SDKMessage union
+- [x] ~~Typed system subtypes for task_started/task_progress/task_notification in SDKMessage union~~ (partially — session_state_changed added Run 22)
