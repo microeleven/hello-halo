@@ -307,12 +307,38 @@ Branch: `feature/sdk`
 
 ---
 
+### Run 20 — WebSearchTool Real Implementation (Brave Search + DuckDuckGo Fallback)
+
+**Feature: WebSearch tool with real search backends (`tools/web-search/index.ts`)**
+- Replaced the placeholder WebSearch tool with a production implementation using real search APIs
+- **Brave Search API** (primary): when `BRAVE_SEARCH_API_KEY` is set in the environment or tool context
+  - Full-text web search via `https://api.search.brave.com/res/v1/web/search`
+  - Client-side domain filtering: `allowed_domains` and `blocked_domains` input params
+    are applied post-fetch since Brave API doesn't natively support domain filters
+  - Results formatted as numbered markdown list with title, URL, and description
+  - Abort-signal-aware with configurable timeout (15s)
+- **DuckDuckGo Instant Answer API** (fallback): when no Brave API key is available
+  - Uses `https://api.duckduckgo.com/` JSON API
+  - Returns abstract answers and related topics (limited coverage vs full search)
+  - Provides a helpful message suggesting BRAVE_SEARCH_API_KEY for full search
+- Both backends are abort-signal-aware and respect the parent ToolContext abort
+- Results include duration timing and result count in the header
+
+**Enhancement: dynamic date in WebSearch description (`tools/web-search/schema.ts`)**
+- Tool description now includes current month/year (matching CC TypeScript behavior)
+- Instructs the LLM to use accurate temporal queries (e.g., "React docs 2026")
+- Description is built at module load time via `buildDescription()` function
+
+- tsc --noEmit passes
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
 - [ ] Worker Thread isolation for background agents (true parallelism)
 
 ### P2 (Important)
-- [ ] WebSearchTool real implementation
+- [x] ~~WebSearchTool real implementation~~ (Run 20)
 - [ ] Agent progress summaries (agentProgressSummaries fork+summarize every 30s)
 - [ ] Typed system subtypes for task_started/task_progress/task_notification in SDKMessage union
