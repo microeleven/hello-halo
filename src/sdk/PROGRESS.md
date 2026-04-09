@@ -833,11 +833,48 @@ lifecycle. Uses the same mock-provider pattern as `query-loop.test.ts` (zero net
 
 ---
 
+### Run 34 — SDKSessionInfo Type Contract Fix + firstPrompt + summary
+
+**Bug fix: `SDKSessionInfo.lastModified` and `createdAt` wrong types (`index.ts`)**
+- CC SDK contract: both fields are `number` (ms since epoch)
+- Our implementation returned ISO strings — any consumer doing numeric comparisons would
+  get NaN or incorrect results (e.g., `Date.now() - session.lastModified` for age calculation)
+- Changed `lastModified: string` → `lastModified: number`, `createdAt?: string` → `createdAt?: number`
+- `listSessions` + `getSessionInfo` now use `fstat.mtimeMs` / `fstat.birthtimeMs`
+- Fixed `listSessions` sort: was string comparison (`b.lastModified > a.lastModified`),
+  now numeric subtraction (`b.lastModified - a.lastModified`) — string sort was incidentally
+  correct for ISO strings but would fail for numeric epoch values
+
+**Enhancement: `firstPrompt` population (`index.ts`)**
+- `SDKSessionInfo.firstPrompt` was never populated (always `undefined`)
+- Added `readFirstPrompt(filePath)` helper: reads up to 8 KB via `FileHandle.read()`
+  (minimal I/O — avoids loading full transcripts into memory during listing)
+- Extracts text from first `user` message in JSONL, handling both `string` content and
+  `ContentBlock[]` text blocks; sliced to 200 chars to prevent oversized payloads
+- `listSessions` and `getSessionInfo` both call `readFirstPrompt` in parallel with `readMeta`
+
+**Enhancement: `summary` field now populated (`index.ts`)**
+- `summary` was always empty string — now follows CC SDK semantics:
+  `customTitle ?? firstPrompt ?? sessionId`
+- Consumers displaying session lists can use `summary` directly without fallback logic
+
+**8 new unit tests (260 total, `core/session-metadata.test.ts`)**
+- `SDKSessionInfo timestamp types` (3 tests): `lastModified`/`createdAt` are numbers > 0;
+  `listSessions` returns numeric timestamps
+- `SDKSessionInfo firstPrompt and summary` (5 tests): firstPrompt extracted from transcript;
+  summary falls back to firstPrompt; customTitle takes priority; empty transcript → sessionId;
+  listSessions batch extraction works correctly
+
+- tsc --noEmit passes
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
 - [x] ~~Elicitation support~~ (Run 32)
 - [x] ~~Session unit tests~~ (Run 33)
+- [x] ~~SDKSessionInfo type contract~~ (Run 34)
 - [ ] Full consumer compatibility e2e test (spawn session, send message, verify all SDKMessage shapes)
 
 ### P2 (Important)
