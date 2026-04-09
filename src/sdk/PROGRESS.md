@@ -620,6 +620,32 @@ Branch: `feature/sdk`
 
 ---
 
+---
+
+### Run 29 — Unit Test Coverage for Core Modules
+
+**Added 7 unit test files covering all core and utility modules:**
+
+- `core/cost.test.ts` — CostTracker: accumulation, pricing lookup, model-switch non-repricing,
+  addChildCost rollup, budget check, reset, getModelUsage, getUsage, summary
+- `core/compact.test.ts` — AutoCompactState circuit breaker, shouldAutoCompact thresholds,
+  calculateTokenWarningState, microCompact truncation, apiCompact trimming, formatCompactSummary
+- `core/hooks.test.ts` — runHooks (matching, glob wildcards, error handling, abort, sequential order),
+  runPreToolUseHooks (decision merging, updatedInput, additionalContext),
+  runPostToolUseHooks, runPostToolUseFailureHooks, runEventHooks
+- `core/messages.test.ts` — buildUserMessage, buildToolResultMessage, extractToolUseBlocks,
+  messageTokenEstimate, messagesToTokenCount
+- `core/transcript.test.ts` — getTranscriptPath encoding, appendToTranscript round-trip,
+  malformed-line resilience, directory auto-creation, transcriptExists, TranscriptWriter lifecycle
+- `utils/retry.test.ts` — delayForAttempt backoff+cap, isRetryableStatus (429/529/5xx),
+  parseRetryAfterMs (delta-seconds, HTTP-date, past/absent), sleep abort signal
+- `utils/tokens.test.ts` — estimateTokens ratio, estimateMessageTokens (string/block/tool_use),
+  ApiTokenAnchor (anchor, scale, reset, zero-guard), isWithinBudget custom threshold
+
+**Total: 122 unit tests, all passing. tsc --noEmit passes.**
+
+---
+
 ## Priority Queue (Next Runs)
 
 ### P1 (Critical)
