@@ -54,3 +54,6 @@ android/local.properties
 .DS_Store
 RELEASE_NOTES.md
 # temp
+
+# Internal digital human skills (wekm)
+.claude/skills/wekm-*
