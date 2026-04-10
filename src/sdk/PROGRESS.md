@@ -227,6 +227,34 @@ In-process execution, OpenAI-compat providers, Worker Thread multi-agent isolati
     config resolution, unique sessionIds across calls
 - **524 tests total** (21 test files)
 
+### Run 42 — Error Hierarchy + Truncation Unit Tests
+- **New `utils/errors.test.ts`** (51 tests):
+  - `SDKError`: name/code/message, instanceof chain, stack trace
+  - `ProviderError`: defaults, statusCode/retryable overrides, instanceof, static factories
+    (`rateLimit()`, `overloaded()`, `contextWindowExceeded()`) with custom messages
+  - `ProviderError.isContextWindowExceeded`: false for non-400; false for 400 + unrelated message;
+    true for all four phrases ("prompt is too long", "context_window_exceeded", "prompt_too_long",
+    "context window"); case-insensitive
+  - `isContextWindowExceededError`: ProviderError path, non-error values, raw Error with
+    status=400 + matching/non-matching messages, wrong status, no status
+  - `ToolExecutionError`: toolName/toolInput/message fields, instanceof
+  - `BudgetExceededError`: currentCostUsd/maxBudgetUsd, dollar formatting in message
+  - `MaxTurnsExceededError`: turns/maxTurns, counts in message
+  - `AbortError`: default + custom message, instanceof
+  - `isAbortError`: AbortError, DOMException name, APIUserAbortError name, code ABORT_ERR,
+    non-abort error, non-error values, signal-aborted override, not-aborted signal
+  - `CompactError`: default + custom message, instanceof
+  - Hierarchy: all subclasses instanceof Error + SDKError; cross-class isolation
+- **New `utils/truncate.test.ts`** (20 tests):
+  - Constants: DEFAULT_MAX_RESULT_SIZE_CHARS=50k, MAX_TOOL_RESULT_TOKENS=100k, MAX_TOOL_RESULTS_PER_MESSAGE_CHARS=200k
+  - `truncateContent` within budget: unchanged string, exact limit, empty string
+  - `truncateContent` over budget: marker inserted, omission count correct, head preserved,
+    tail preserved, even head/tail split, marker newlines, 1-char-over edge case
+  - `truncateToolResult`: default budget pass-through, default budget truncation,
+    custom budget truncation, custom budget exact match, delegates to truncateContent
+  - Edge cases: maxChars=1, unicode content, content with newlines
+- **595 tests total** (23 test files)
+
 ---
 
 ## Priority Queue (Next Runs)
