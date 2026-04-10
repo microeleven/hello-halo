@@ -2,7 +2,7 @@
  * Unit tests for compaction utilities.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   AutoCompactState,
   shouldAutoCompact,
@@ -10,8 +10,10 @@ import {
   microCompact,
   apiCompact,
   formatCompactSummary,
+  fullCompact,
+  autoCompactIfNeeded,
 } from './compact.js';
-import type { Message, ToolResultBlock } from '../types/provider.js';
+import type { Message, ToolResultBlock, LlmProvider, ProviderResponse } from '../types/provider.js';
 
 // ---------------------------------------------------------------------------
 // AutoCompactState — circuit breaker
@@ -196,6 +198,80 @@ describe('apiCompact', () => {
 });
 
 // ---------------------------------------------------------------------------
+// microCompact — array-typed tool_result content
+// ---------------------------------------------------------------------------
+
+describe('microCompact — array content', () => {
+  it('counts array-typed tool_result content against the budget', () => {
+    const msgs: Message[] = [{
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 'tu1',
+        content: [{ type: 'text', text: 'x'.repeat(50_000) }],
+      } as ToolResultBlock],
+    }];
+    // Budget smaller than content → should truncate
+    const { truncatedCount } = microCompact(msgs, 100);
+    expect(truncatedCount).toBe(1);
+  });
+
+  it('truncates array-typed content to placeholder string', () => {
+    const msgs: Message[] = [{
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 'tu2',
+        content: [{ type: 'text', text: 'large content here'.repeat(5000) }],
+      } as ToolResultBlock],
+    }];
+    const { messages } = microCompact(msgs, 100);
+    const block = (messages[0].content as ToolResultBlock[])[0];
+    // After truncation, content is replaced with a string placeholder
+    expect(typeof block.content).toBe('string');
+    expect(block.content as string).toContain('[tool result truncated');
+  });
+
+  it('leaves array content untouched when within budget', () => {
+    const text = 'small';
+    const msgs: Message[] = [{
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 'tu3',
+        content: [{ type: 'text', text }],
+      } as ToolResultBlock],
+    }];
+    const { messages, truncatedCount } = microCompact(msgs, 1_000_000);
+    expect(truncatedCount).toBe(0);
+    const block = (messages[0].content as ToolResultBlock[])[0];
+    expect(Array.isArray(block.content)).toBe(true);
+  });
+
+  it('truncates oldest tool result first when multiple messages exceed budget', () => {
+    const make = (id: string, size: number): Message => ({
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: id,
+        content: 'a'.repeat(size),
+      } as ToolResultBlock],
+    });
+    // Two large messages; budget allows only one
+    const msgs: Message[] = [make('old', 60_000), make('new', 60_000)];
+    const { messages, truncatedCount } = microCompact(msgs, 60_000);
+    expect(truncatedCount).toBe(1);
+    // The first (oldest) message should be truncated
+    const firstBlock = (messages[0].content as ToolResultBlock[])[0];
+    expect(firstBlock.content as string).toContain('[tool result truncated');
+    // The second (newest) should be intact
+    const secondBlock = (messages[1].content as ToolResultBlock[])[0];
+    expect(typeof secondBlock.content).toBe('string');
+    expect((secondBlock.content as string).startsWith('a')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // formatCompactSummary
 // ---------------------------------------------------------------------------
 
@@ -207,5 +283,199 @@ describe('formatCompactSummary', () => {
 
   it('returns empty string for empty input', () => {
     expect(formatCompactSummary('')).toBe('');
+  });
+
+  it('strips <analysis>...</analysis> block entirely', () => {
+    const input = '<analysis>This is analysis</analysis>\nSome conclusion.';
+    const result = formatCompactSummary(input);
+    expect(result).not.toContain('<analysis>');
+    expect(result).not.toContain('This is analysis');
+    expect(result).toContain('Some conclusion.');
+  });
+
+  it('converts <summary>...</summary> to "Summary:\\n" prefix', () => {
+    const input = '<summary>Key findings here.</summary>';
+    const result = formatCompactSummary(input);
+    expect(result).toContain('Summary:');
+    expect(result).toContain('Key findings here.');
+    expect(result).not.toContain('<summary>');
+    expect(result).not.toContain('</summary>');
+  });
+
+  it('handles both <analysis> and <summary> together', () => {
+    const input =
+      '<analysis>Internal reasoning.</analysis>\n' +
+      '<summary>The final answer.</summary>';
+    const result = formatCompactSummary(input);
+    expect(result).not.toContain('<analysis>');
+    expect(result).not.toContain('Internal reasoning.');
+    expect(result).toContain('Summary:');
+    expect(result).toContain('The final answer.');
+  });
+
+  it('collapses multiple consecutive blank lines into a single blank line', () => {
+    const input = 'Line 1\n\n\n\nLine 2';
+    const result = formatCompactSummary(input);
+    // Should not have three consecutive newlines
+    expect(result).not.toMatch(/\n{3,}/);
+    expect(result).toContain('Line 1');
+    expect(result).toContain('Line 2');
+  });
+
+  it('passes through text with no XML tags unchanged (modulo trim)', () => {
+    const input = 'Plain summary without any tags.';
+    expect(formatCompactSummary(input)).toBe(input);
+  });
+
+  it('strips only the analysis block when no summary tag present', () => {
+    const input = 'Preamble.\n<analysis>Skip me.</analysis>\nEpilogue.';
+    const result = formatCompactSummary(input);
+    expect(result).not.toContain('Skip me.');
+    expect(result).toContain('Epilogue.');
+  });
+
+  it('preserves content before and after summary tags', () => {
+    const input = 'Intro.\n<summary>Core content.</summary>\nOutro.';
+    const result = formatCompactSummary(input);
+    expect(result).toContain('Intro.');
+    expect(result).toContain('Core content.');
+    expect(result).toContain('Outro.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fullCompact — async, requires mock LlmProvider
+// ---------------------------------------------------------------------------
+
+function makeMockProvider(summaryText: string): LlmProvider {
+  const response: ProviderResponse = {
+    content: [{ type: 'text', text: summaryText }],
+    stopReason: 'end_turn',
+    usage: { input_tokens: 100, output_tokens: 50 },
+  };
+  return {
+    createMessage: vi.fn().mockResolvedValue(response),
+    createMessageStream: vi.fn(),
+    listModels: vi.fn().mockResolvedValue([]),
+    healthCheck: vi.fn().mockResolvedValue({ healthy: true }),
+  } as unknown as LlmProvider;
+}
+
+function makeMessages(count: number): Message[] {
+  return Array.from({ length: count }, (_, i) => ({
+    role: i % 2 === 0 ? 'user' as const : 'assistant' as const,
+    content: `Message ${i}`,
+  }));
+}
+
+describe('fullCompact', () => {
+  it('returns messages unchanged when total is at or below KEEP_RECENT_MESSAGES + 1', async () => {
+    const provider = makeMockProvider('summary');
+    // KEEP_RECENT_MESSAGES=10 → threshold is ≤11 messages
+    const msgs = makeMessages(11);
+    const result = await fullCompact(msgs, provider, 'claude-sonnet-4-6', '');
+    expect(result.messages).toHaveLength(11);
+    expect(result.summary).toBe('');
+    expect(result.tokensFreed).toBe(0);
+    expect(provider.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('calls provider.createMessage with a transcript and returns compacted messages', async () => {
+    const provider = makeMockProvider('Summary:\nThe conversation covered X and Y.');
+    const msgs = makeMessages(14); // 14 > 11
+    const result = await fullCompact(msgs, provider, 'claude-sonnet-4-6', '');
+    expect(provider.createMessage).toHaveBeenCalledOnce();
+    // Result starts with compact notice, then tail (last 10 messages)
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(result.messages.length).toBeLessThan(msgs.length);
+    // Summary is present
+    expect(result.summary).toBeTruthy();
+  });
+
+  it('first new message is the compact notice containing the summary', async () => {
+    const rawSummary = 'The session covered file edits and tests.';
+    const provider = makeMockProvider(rawSummary);
+    const msgs = makeMessages(14);
+    const result = await fullCompact(msgs, provider, 'claude-sonnet-4-6', '');
+    const notice = result.messages[0];
+    expect(notice.role).toBe('user');
+    expect(typeof notice.content).toBe('string');
+    expect(notice.content as string).toContain('continued from a previous conversation');
+  });
+
+  it('tokensFreed is non-negative', async () => {
+    const provider = makeMockProvider('Compact summary.');
+    const msgs = makeMessages(20);
+    const result = await fullCompact(msgs, provider, 'claude-sonnet-4-6', '');
+    expect(result.tokensFreed).toBeGreaterThanOrEqual(0);
+  });
+
+  it('throws when provider returns empty summary', async () => {
+    const emptyResponse: ProviderResponse = {
+      content: [{ type: 'text', text: '' }],
+      stopReason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 0 },
+    };
+    const provider = {
+      createMessage: vi.fn().mockResolvedValue(emptyResponse),
+      createMessageStream: vi.fn(),
+      listModels: vi.fn(),
+      healthCheck: vi.fn(),
+    } as unknown as LlmProvider;
+    const msgs = makeMessages(14);
+    await expect(fullCompact(msgs, provider, 'claude-sonnet-4-6', '')).rejects.toThrow(
+      'Compact summary was empty',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// autoCompactIfNeeded
+// ---------------------------------------------------------------------------
+
+describe('autoCompactIfNeeded', () => {
+  it('returns null when tokens are below auto-compact threshold', async () => {
+    const provider = makeMockProvider('summary');
+    const state = new AutoCompactState();
+    const msgs = makeMessages(20);
+    // claude-sonnet-4-6 → 200k context window; threshold=180k; pass 100k tokens
+    const result = await autoCompactIfNeeded(msgs, 100_000, 'claude-sonnet-4-6', provider, '', state);
+    expect(result).toBeNull();
+    expect(provider.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('runs fullCompact and calls state.onSuccess() when above threshold', async () => {
+    const provider = makeMockProvider('The session summary.');
+    const state = new AutoCompactState();
+    const msgs = makeMessages(20);
+    // Pass 190k tokens (above 180k threshold)
+    const result = await autoCompactIfNeeded(msgs, 190_000, 'claude-sonnet-4-6', provider, '', state);
+    expect(result).not.toBeNull();
+    expect(state.compactionCount).toBe(1);
+    expect(state.consecutiveFailures).toBe(0);
+  });
+
+  it('returns null and calls state.onFailure() when fullCompact throws', async () => {
+    const provider = {
+      createMessage: vi.fn().mockRejectedValue(new Error('API failure')),
+      createMessageStream: vi.fn(),
+      listModels: vi.fn(),
+      healthCheck: vi.fn(),
+    } as unknown as LlmProvider;
+    const state = new AutoCompactState();
+    const msgs = makeMessages(20);
+    const result = await autoCompactIfNeeded(msgs, 190_000, 'claude-sonnet-4-6', provider, '', state);
+    expect(result).toBeNull();
+    expect(state.consecutiveFailures).toBe(1);
+  });
+
+  it('returns null when circuit breaker is already open', async () => {
+    const provider = makeMockProvider('summary');
+    const state = new AutoCompactState();
+    state.disabled = true;
+    const msgs = makeMessages(20);
+    const result = await autoCompactIfNeeded(msgs, 190_000, 'claude-sonnet-4-6', provider, '', state);
+    expect(result).toBeNull();
+    expect(provider.createMessage).not.toHaveBeenCalled();
   });
 });

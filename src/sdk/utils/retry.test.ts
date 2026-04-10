@@ -115,11 +115,53 @@ describe('parseRetryAfterMs', () => {
 // sleep
 // ---------------------------------------------------------------------------
 
+describe('delayForAttempt — jitter bounds', () => {
+  it('jitter is always non-negative (delay >= base)', () => {
+    // Math.random returns [0, 1) — jitter = base * 0.1 * rand ≥ 0
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const d = delayForAttempt(DEFAULT_RETRY, 0);
+    // base = 1000, jitter = 0 → exactly 1000 (before cap)
+    expect(d).toBe(1_000);
+    vi.restoreAllMocks();
+  });
+
+  it('jitter is at most 10% of the base delay', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.9999);
+    const d = delayForAttempt(DEFAULT_RETRY, 0);
+    // base = 1000, max jitter ≈ 1000 * 0.1 * 1 = 100 → at most 1100
+    expect(d).toBeLessThanOrEqual(1_100);
+    vi.restoreAllMocks();
+  });
+
+  it('jitter scales with the attempt (larger base = larger jitter band)', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1); // max jitter for both
+    const d0 = delayForAttempt(DEFAULT_RETRY, 0); // base=1000
+    const d1 = delayForAttempt(DEFAULT_RETRY, 1); // base=2000
+    // Both at max jitter: d1 should be larger than d0
+    expect(d1).toBeGreaterThan(d0);
+    vi.restoreAllMocks();
+  });
+
+  it('maxDelayMs caps the final value including jitter', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1); // push towards max
+    const cfg = { ...DEFAULT_RETRY, maxDelayMs: 1_050 };
+    // attempt=0: base=1000, max jitter=100, uncapped=1100 → capped at 1050
+    const d = delayForAttempt(cfg, 0);
+    expect(d).toBe(1_050);
+    vi.restoreAllMocks();
+  });
+});
+
 describe('sleep', () => {
   it('resolves after the specified delay', async () => {
     const start = Date.now();
     await sleep(50);
     expect(Date.now() - start).toBeGreaterThanOrEqual(40);
+  });
+
+  it('resolves normally when no abort signal is provided', async () => {
+    // No signal argument — should resolve cleanly
+    await expect(sleep(10)).resolves.toBeUndefined();
   });
 
   it('rejects immediately when signal is already aborted', async () => {
