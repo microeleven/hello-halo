@@ -202,6 +202,31 @@ In-process execution, OpenAI-compat providers, Worker Thread multi-agent isolati
     stream with only comments/empty lines
 - **455 tests total** (19 test files)
 
+### Run 41 — Debug Log Removal (query-loop.ts) + TokenBudget + Context Unit Tests
+- **Bug fix**: `query-loop.ts` had 3 leftover `[QUERY-LOOP]` debug `console.log` calls
+  (stream_event counter, accumulateAndStream done, yielding result) plus the `_dbgStreamEventCount`
+  variable — all fully removed. These appeared in e2e test stdout, causing noise in CI output.
+- **New `core/token-budget.test.ts`** (23 tests):
+  - Constructor: contextWindow 200k/100k selection, maxOutputTokens default/override
+  - `currentInputTokens`: heuristic fallback, API usage preference, sequential updates
+  - `remainingInputTokens`: correct arithmetic, clamped at 0 when over budget
+  - `usageRatio`: 0 for empty, proportional to API usage, capped at 1.0, saturated when maxOut >= cw
+  - `shouldCompact`: false below 90%, true at/above 90%
+  - `shouldReduceToolResults`: false below 70%, true at/above 70%
+  - `summary`: readable format with commas and % sign
+- **New `core/context.test.ts`** (46 tests):
+  - `resolveQueryConfig` defaults: model, maxTokens, maxTurns, maxBudgetUsd, cwd, env,
+    systemPrompt, effort, toolResultBudget, includePartialMessages, permissionMode,
+    abortSignal creation vs. reuse, optional fields passthrough
+  - `resolveQueryConfig` thinking: disabled default, explicit config, precedence over
+    maxThinkingTokens, adaptive for claude-opus-4/sonnet-4 with maxThinkingTokens,
+    enabled-with-budget for legacy models, zero maxThinkingTokens → disabled
+  - `createAgentContext`: UUID generation, sessionId reuse, provider reference,
+    tools array, isSubAgent flag, parentAgentId, empty messages, currentTurn=0,
+    shellState/toolContext cwd matching, toolContext.sessionId matching, costTracker presence,
+    config resolution, unique sessionIds across calls
+- **524 tests total** (21 test files)
+
 ---
 
 ## Priority Queue (Next Runs)

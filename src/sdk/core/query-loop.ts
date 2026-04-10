@@ -731,7 +731,6 @@ async function* accumulateAndStream(
   let msgId = '';
   let msgModel = '';
 
-  let _dbgStreamEventCount = 0;
   for await (const event of stream) {
     if (signal.aborted) {
       throw new AbortError(signal.reason ?? 'Operation was aborted');
@@ -749,8 +748,6 @@ async function* accumulateAndStream(
         uuid: randomUUID(),
         session_id: sessionId,
       };
-      _dbgStreamEventCount++;
-      console.log(`[QUERY-LOOP] stream_event#${_dbgStreamEventCount} inner_type=${event.type} t=${Date.now()}`);
       yield streamMsg;
       onProgress?.(streamMsg);
     }
@@ -864,7 +861,6 @@ async function* accumulateAndStream(
     content.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
   }
 
-  console.log(`[QUERY-LOOP] accumulateAndStream done. stopReason=${stopReason} textLen=${textChunks.join('').length} tools=${toolCallBlocks.size} t=${Date.now()}`);
   return { content, usage, stopReason, id: msgId || randomUUID(), model: msgModel };
 }
 
@@ -1408,7 +1404,6 @@ export async function* queryLoop(
         .map((b) => (b as { type: 'text'; text: string }).text)
         .join('\n');
 
-      console.log(`[QUERY-LOOP] yielding result (success) turn=${turn} stopReason=${accumulated.stopReason} t=${Date.now()}`);
       const resultMsg: SDKMessage = {
         type: 'result',
         subtype: 'success',
