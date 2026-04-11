@@ -22,6 +22,8 @@ import { CompactNotice } from '../chat/CompactNotice'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { buildImSessionKey } from '../../../shared/apps/im-keys'
+import { CHANNEL_LABELS } from './im-channel-labels'
 
 interface ImChatViewProps {
   appId: string
@@ -31,20 +33,12 @@ interface ImChatViewProps {
   clearKey?: number
 }
 
-/** Channel labels for the info bar */
-const CHANNEL_LABELS: Record<string, string> = {
-  'wecom-bot': 'WeCom',
-  'feishu-bot': 'Feishu',
-  'dingtalk-bot': 'DingTalk',
-}
-
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProps) {
   const { t } = useTranslation()
 
-  // Build conversationId matching backend's buildImSessionKey()
-  const conversationId = `app-chat:${appId}:${session.channel}:${session.chatType}:${session.chatId}`
+  const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
 
   // Persisted messages
   const [messages, setMessages] = useState<Message[]>([])

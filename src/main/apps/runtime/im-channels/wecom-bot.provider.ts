@@ -135,11 +135,16 @@ class WecomBotInstance implements ImChannelInstance {
 
   stop(): void {
     this.active = false
-    this.inboundHandler = null
+    // Cancel all timers before tearing down the socket so no reconnect or
+    // heartbeat fires during teardown.
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null }
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     if (this.reqIdCleanupTimer) { clearInterval(this.reqIdCleanupTimer); this.reqIdCleanupTimer = null }
+    // Destroy socket first, then clear the handler.  Reversing the order would
+    // create a brief window where an in-flight WebSocket message callback could
+    // fire with a null handler and silently drop the message.
     this.destroySocket()
+    this.inboundHandler = null
     this.reqIdMap.clear()
     this.reconnectAttempts = 0
     console.log(`[WecomBot:${this.instanceId}] Stopped`)

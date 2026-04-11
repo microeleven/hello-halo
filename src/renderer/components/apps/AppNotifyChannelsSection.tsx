@@ -29,6 +29,7 @@ import type {
   NotificationChannelsConfig,
 } from '../../../shared/types/notification-channels'
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
+import type { ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 
 // ============================================
 // Types
@@ -110,19 +111,26 @@ interface ChannelStatus {
 
 function getChannelStatuses(
   config: HaloConfig | null,
-  botStatus: { connected: boolean } | null,
+  imStatuses: ImChannelInstanceStatus[],
 ): Record<string, ChannelStatus> {
   const statuses: Record<string, ChannelStatus> = {}
 
-  // WeCom Bot
-  const bot = config?.wecomBot as { enabled?: boolean; botId?: string } | undefined
-  const botConfigured = Boolean(bot?.enabled && bot?.botId)
-  statuses['wecom-bot'] = {
-    configured: botConfigured,
-    connected: botConfigured ? botStatus?.connected : undefined,
+  // Bidirectional IM channels — derive from runtime instance statuses
+  // This supports multi-instance: configured = any enabled instance exists,
+  // connected = any instance is connected.
+  for (const ch of ALL_CHANNELS) {
+    if (ch.direction === 'bidirectional') {
+      const instances = imStatuses.filter(s => s.type === ch.id)
+      const anyEnabled = instances.some(s => s.enabled)
+      const anyConnected = instances.some(s => s.connected)
+      statuses[ch.id] = {
+        configured: anyEnabled,
+        connected: anyEnabled ? anyConnected : undefined,
+      }
+    }
   }
 
-  // Notification channels
+  // One-way notification channels — from global config
   const channels = config?.notificationChannels as NotificationChannelsConfig | undefined
   for (const ch of ALL_CHANNELS) {
     if (ch.notifyType && channels) {
@@ -279,10 +287,10 @@ export function AppNotifyChannelsSection({ appId, selectedChannels, appName }: A
   const { updateAppSpec } = useAppsStore()
 
   const [globalConfig, setGlobalConfig] = useState<HaloConfig | null>(null)
-  const [botStatus, setBotStatus] = useState<{ connected: boolean } | null>(null)
+  const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
   const [expandedBidirectional, setExpandedBidirectional] = useState<Set<string>>(new Set(['wecom-bot']))
 
-  // Fetch global config to determine channel statuses
+  // Fetch global config to determine one-way channel statuses
   useEffect(() => {
     let cancelled = false
     async function fetch() {
@@ -299,25 +307,25 @@ export function AppNotifyChannelsSection({ appId, selectedChannels, appName }: A
     return () => { cancelled = true }
   }, [])
 
-  // Poll WeCom Bot connection status
+  // Poll IM channel instance statuses (covers all bidirectional channels)
   useEffect(() => {
     let cancelled = false
-    async function fetchBot() {
+    async function fetchStatuses() {
       try {
-        const res = await api.getWecomBotStatus() as { success: boolean; data?: { connected: boolean } }
+        const res = await api.imChannelsStatus() as { success: boolean; data?: ImChannelInstanceStatus[] }
         if (!cancelled && res.success && res.data) {
-          setBotStatus({ connected: res.data.connected })
+          setImStatuses(res.data)
         }
       } catch {
         // Ignore
       }
     }
-    fetchBot()
-    const interval = setInterval(fetchBot, 15_000)
+    fetchStatuses()
+    const interval = setInterval(fetchStatuses, 15_000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [])
 
-  const channelStatuses = getChannelStatuses(globalConfig, botStatus)
+  const channelStatuses = getChannelStatuses(globalConfig, imStatuses)
 
   // Toggle a one-way notification channel
   const handleToggleChannel = useCallback(async (notifyType: NotificationChannelType) => {

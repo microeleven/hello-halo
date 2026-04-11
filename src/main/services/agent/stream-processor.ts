@@ -36,6 +36,7 @@ import {
   handleTaskNotification,
   type SubAgentContext
 } from './subagent-handler'
+import { TRANSPARENT_TOOLS } from './constants'
 
 // Unified fallback error suffix - guides user to check logs
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
@@ -215,12 +216,11 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
 
   // Text block merge strategy:
   // AI sometimes splits its final reply across consecutive text blocks. We merge them.
-  // A "substantive" tool_use (anything except TodoWrite) breaks continuity — text before
-  // it is transitional ("let me do X…") and should not appear in the final bubble.
-  // TodoWrite is bookkeeping-only, so it does NOT break text continuity.
+  // A "substantive" tool_use breaks continuity — text before it is transitional
+  // ("let me do X…") and should not appear in the final bubble.
+  // TRANSPARENT_TOOLS are bookkeeping/coordination-only and do NOT break continuity.
+  // See services/agent/constants.ts for the authoritative list.
   //
-  // Tools considered transparent (do not break text continuity):
-  const TRANSPARENT_TOOLS = new Set(['TodoWrite'])
   // When true, the next text block overwrites; when false, it appends.
   let hadSubstantiveToolSinceLastText = false
 

@@ -25,6 +25,7 @@ import { AppChatView } from './AppChatView'
 import { ImChatView } from './ImChatView'
 import { ImSessionPanel } from './ImSessionPanel'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { buildImSessionKey } from '../../../shared/apps/im-keys'
 
 interface AppChatContainerProps {
   appId: string
@@ -129,7 +130,7 @@ function useImActiveIndicator(appId: string): boolean {
   // Stabilize convIds — only rebuild when imSessions or appId changes,
   // avoiding a new array (and new selector closure) on every render.
   const convIds = useMemo(
-    () => imSessions.map(s => `app-chat:${appId}:${s.channel}:${s.chatType}:${s.chatId}`),
+    () => imSessions.map(s => buildImSessionKey(appId, s.channel, s.chatType, s.chatId)),
     [imSessions, appId]
   )
 

@@ -125,6 +125,7 @@ export interface AgentConfig {
   promptProfile?: 'official' | 'halo';  // System prompt profile
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
+  enableTeams?: boolean;    // Enable Agent Teams (multi-agent collaboration)
 }
 
 // CLI config types (used by CLIConfigSection)

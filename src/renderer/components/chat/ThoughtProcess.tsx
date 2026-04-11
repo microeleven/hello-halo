@@ -367,7 +367,6 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
   // Auto-expand when isThinking becomes true (streaming started)
   // Only do this once per session to avoid annoying user who manually collapsed
   useEffect(() => {
-    console.log(`[STREAM-DEBUG][renderer] ThoughtProcess auto-expand check: isThinking=${isThinking}, hasAutoExpanded=${hasAutoExpanded}, thoughts=${thoughts.length} → willExpand=${isThinking && !hasAutoExpanded && thoughts.length > 0}`)
     if (isThinking && !hasAutoExpanded && thoughts.length > 0) {
       setIsExpanded(true)
       setHasAutoExpanded(true)

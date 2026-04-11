@@ -37,7 +37,7 @@ import { saveSessionId } from '../conversation.service'
 import { notifyTaskComplete } from '../notification.service'
 import { getConversation } from '../conversation.service'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
-import { createSessionState } from './session-manager'
+import { createSessionState, consumePendingRebuild } from './session-manager'
 
 // ============================================
 // Types
@@ -151,6 +151,11 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
   console.log(`[Consumer][${conversationId}] Consumer started`)
 
+  // Track consecutive empty iterations for exponential backoff (M2 fix)
+  let consecutiveEmptyIterations = 0
+  const MAX_EMPTY_ITERATIONS = 5
+  const BACKOFF_BASE_MS = 100
+
   while (!state.consumerAbort.signal.aborted) {
     // Create a fresh per-turn AbortController
     const turnAbort = new AbortController()
@@ -166,6 +171,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
     const turnStartTime = Date.now()
     let receivedAnyEvent = false
+    let agentCompleteEmitted = false
 
     try {
       // processStream consumes one turn. The onTurnInit callback fires when CC
@@ -202,6 +208,9 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
       // Turn complete — persist result and notify frontend
       if (receivedAnyEvent) {
+        // Reset empty iteration counter on successful turn
+        consecutiveEmptyIterations = 0
+
         persistTurnResult(spaceId, conversationId, result)
 
         // Emit agent:complete — injection messages are absorbed mid-turn by CC,
@@ -211,6 +220,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           duration: Date.now() - turnStartTime,
           tokenUsage: result.tokenUsage,
         })
+        agentCompleteEmitted = true
 
         // System notification for task completion (if window not focused)
         const conversation = getConversation(spaceId, conversationId)
@@ -222,17 +232,32 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           ` duration=${Date.now() - turnStartTime}ms`
         )
 
-        // Note: config changes (model switch, API key change) during a turn are
-        // handled lazily — the session continues with the old config until the
-        // next sendMessage, where getOrCreateV2Session detects stale credentials
-        // and force-rebuilds the session. This matches the old architecture's
-        // behavior of skipping active sessions in invalidateAllSessions().
+        // Check if API config changed during this turn (M5 fix).
+        // If so, break the loop — the session will be rebuilt with new credentials
+        // on the next sendMessage via getOrCreateV2Session.
+        if (consumePendingRebuild(conversationId)) {
+          console.log(`[Consumer][${conversationId}] Config changed during turn, breaking for rebuild`)
+          break
+        }
       } else {
-        // stream() returned immediately with no events — CC is idle.
-        // This can happen if stream() terminates without yielding events
-        // (e.g., CC subprocess exited). Brief delay to avoid tight spin.
-        console.log(`[Consumer][${conversationId}] stream() returned with no events, waiting...`)
-        await sleep(100)
+        // stream() returned immediately with no events — CC is idle or in bad state.
+        // Apply exponential backoff to avoid tight spin (M2 fix).
+        consecutiveEmptyIterations++
+        const backoffMs = Math.min(BACKOFF_BASE_MS * Math.pow(2, consecutiveEmptyIterations - 1), 5000)
+        console.log(
+          `[Consumer][${conversationId}] stream() returned with no events ` +
+          `(${consecutiveEmptyIterations}/${MAX_EMPTY_ITERATIONS}), backoff ${backoffMs}ms`
+        )
+
+        if (consecutiveEmptyIterations >= MAX_EMPTY_ITERATIONS) {
+          console.warn(
+            `[Consumer][${conversationId}] ${MAX_EMPTY_ITERATIONS} consecutive empty iterations, ` +
+            `process may be in bad state — exiting consumer`
+          )
+          break
+        }
+
+        await sleep(backoffMs)
       }
     } catch (err) {
       if (state.consumerAbort.signal.aborted) {
@@ -267,11 +292,15 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         })
       }
 
+      // Reset empty iteration counter — errors are not empty iterations
+      consecutiveEmptyIterations = 0
+
       // Emit complete so frontend transitions out of generating state
       emitAgentEvent('agent:complete', spaceId, conversationId, {
         type: 'complete',
         duration: Date.now() - turnStartTime,
       })
+      agentCompleteEmitted = true
 
       // If the error is fatal (process died), break the consumer loop
       if (isProcessDeadError(error)) {
@@ -279,6 +308,17 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         break
       }
     } finally {
+      // Safety net (M1 fix): guarantee agent:complete is emitted if a turn started
+      // but neither the happy path nor catch path emitted it (e.g., unhandled
+      // exception between persistTurnResult and emitAgentEvent).
+      if (receivedAnyEvent && !agentCompleteEmitted) {
+        console.warn(`[Consumer][${conversationId}] Safety net: emitting agent:complete (missed in normal path)`)
+        emitAgentEvent('agent:complete', spaceId, conversationId, {
+          type: 'complete',
+          duration: Date.now() - turnStartTime,
+        })
+      }
+
       state.processingTurn = false
       state.currentSessionState = null
       state.consumerAbort.signal.removeEventListener('abort', onConsumerAbort)

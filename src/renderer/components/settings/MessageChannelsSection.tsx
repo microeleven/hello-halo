@@ -342,6 +342,7 @@ function InstanceCard({
       : t('Disconnected')
 
   const [showMenu, setShowMenu] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   // Close menu on outside click
@@ -350,21 +351,45 @@ function InstanceCard({
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setShowMenu(false)
+        setShowDeleteConfirm(false)
       }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [showMenu])
 
-  // Debounced save for config fields
+  // Debounced save for config fields.
+  // pendingSaveRef always holds the most-recent unsaved value so we can
+  // flush it synchronously on unmount (e.g. card collapsed within 500 ms).
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSaveRef = useRef<ImChannelInstanceConfig | null>(null)
+  // Keep a stable ref to onChange so the unmount cleanup can call it without
+  // adding onChange to the flush effect's dependency array.
+  const onChangeRef = useRef(onChange)
+  useEffect(() => { onChangeRef.current = onChange })
+
   const scheduleChange = useCallback((updated: ImChannelInstanceConfig) => {
+    pendingSaveRef.current = updated
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      onChange(updated)
+      onChangeRef.current(updated)
+      pendingSaveRef.current = null
       saveTimerRef.current = null
     }, 500)
-  }, [onChange])
+  }, [])
+
+  // Flush any pending debounced save when the card unmounts (e.g. card
+  // collapsed or parent component unmounts before the 500 ms timer fires).
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current !== null && pendingSaveRef.current !== null) {
+        clearTimeout(saveTimerRef.current)
+        onChangeRef.current(pendingSaveRef.current)
+        saveTimerRef.current = null
+        pendingSaveRef.current = null
+      }
+    }
+  }, [])
 
   // Use local draft to avoid cursor jumping
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null)
@@ -427,14 +452,37 @@ function InstanceCard({
                   <RefreshCw className="w-3.5 h-3.5" />
                   {t('Reconnect')}
                 </button>
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onDelete() }}
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted text-red-500 transition-colors flex items-center gap-2"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  {t('Delete')}
-                </button>
+                {showDeleteConfirm ? (
+                  // Inline confirmation — avoids misclick on a destructive action
+                  <div className="px-3 py-2 space-y-1.5">
+                    <p className="text-xs text-muted-foreground">{t('Delete this instance?')}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setShowMenu(false); setShowDeleteConfirm(false); onDelete() }}
+                        className="flex-1 px-2 py-1 text-xs rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
+                      >
+                        {t('Confirm')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(false) }}
+                        className="flex-1 px-2 py-1 text-xs rounded hover:bg-muted text-muted-foreground transition-colors"
+                      >
+                        {t('Cancel')}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true) }}
+                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted text-destructive transition-colors flex items-center gap-2"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {t('Delete')}
+                  </button>
+                )}
               </div>
             )}
           </div>

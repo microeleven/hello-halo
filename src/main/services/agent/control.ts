@@ -8,7 +8,7 @@
  * - Get session state for recovery
  */
 
-import { activeSessions, v2Sessions, closeV2Session, getConsumerHandle } from './session-manager'
+import { activeSessions, v2Sessions, closeV2Session, getConsumerHandle, getRunningConsumerIds } from './session-manager'
 import { hasActiveTeamTasks } from './subagent-handler'
 import type { Thought } from './types'
 
@@ -100,17 +100,31 @@ export async function stopGeneration(conversationId?: string): Promise<void> {
       console.log(`[Agent] Stopped generation for conversation: ${conversationId}`)
     }
   } else {
-    // Stop all sessions: close() all V2 sessions to ensure clean termination
-    // (safe for both team and non-team sessions)
+    // Stop all sessions: use interrupt for non-team sessions, close for team sessions
     for (const [convId, session] of Array.from(activeSessions)) {
       session.abortController.abort()
 
       const v2Session = v2Sessions.get(convId)
       if (v2Session) {
-        try {
-          v2Session.session.close()
-        } catch (e) {
-          console.error(`[Agent] Failed to close V2 session ${convId}:`, e)
+        if (hasActiveTeamTasks(session.thoughts)) {
+          // Team mode: close() kills the entire subprocess (main agent + all team members)
+          try {
+            v2Session.session.close()
+          } catch (e) {
+            console.error(`[Agent] Failed to close V2 session ${convId}:`, e)
+          }
+        } else {
+          // Non-team: interrupt first for graceful shutdown, then close
+          try {
+            await (v2Session.session as any).interrupt()
+          } catch (e) {
+            // Interrupt may fail if process already exiting — proceed to close
+          }
+          try {
+            v2Session.session.close()
+          } catch (e) {
+            console.error(`[Agent] Failed to close V2 session ${convId}:`, e)
+          }
         }
         closeV2Session(convId)
       }
@@ -147,10 +161,19 @@ export function isGenerating(conversationId: string): boolean {
 }
 
 /**
- * Get all active session conversation IDs
+ * Get all active session conversation IDs.
+ * Includes both legacy activeSessions (app-chat/execute) and
+ * consumer-based chat conversations with a running consumer.
  */
 export function getActiveSessions(): string[] {
-  return Array.from(activeSessions.keys())
+  const sessions = new Set(activeSessions.keys())
+
+  // Include consumer-based sessions that have a running consumer
+  for (const convId of getRunningConsumerIds()) {
+    sessions.add(convId)
+  }
+
+  return Array.from(sessions)
 }
 
 // ============================================

@@ -147,6 +147,21 @@ export abstract class BaseStreamHandler {
       console.log(`[StreamHandler] Accumulated text:\n${this.state.accumulatedText}`)
     }
 
+    // LLM response sample — one line per turn, always-on
+    {
+      const tools = [...this.toolCallMap.values()].map(t => t.name)
+      const textPreview = this.state.accumulatedText
+        ? this.state.accumulatedText.slice(0, 80).replace(/\n/g, '↵')
+        : ''
+      if (tools.length > 0) {
+        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → tool_calls=[${tools.join(',')}]`)
+      } else if (textPreview) {
+        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → text="${textPreview}"`)
+      } else {
+        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → (empty)`)
+      }
+    }
+
     // Close any open block
     this.closeCurrentBlock()
 

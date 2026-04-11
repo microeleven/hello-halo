@@ -604,20 +604,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     }
   } finally {
     // ── 8. Close session ────────────────────────────────────
-    // On escalation, keep the session alive so the follow-up run can
-    // potentially reuse the in-memory process (fast path). The session
-    // process will be reclaimed by the OS when Electron exits, or die
-    // naturally when idle. Disk-persisted history ensures recovery
-    // regardless of process state.
-    if (session && !escalationEntryId) {
+    // Always close the session. Escalation follow-up recovers context
+    // via CC's disk-based resume (sessionId), not process reuse.
+    if (session) {
       try {
         session.close()
         console.log(`[Runtime][${runTag}] Session closed`)
       } catch (closeErr) {
         console.error(`[Runtime] Failed to close session: run=${runId}:`, closeErr)
       }
-    } else if (session && escalationEntryId) {
-      console.log(`[Runtime][${runTag}] Session kept alive for escalation context recovery`)
     }
 
     // ── 9. Destroy scoped browser context (cleans up owned views) ──

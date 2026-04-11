@@ -1066,8 +1066,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleAgentComplete: async (data) => {
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
-    const _sc = get().sessions.get(conversationId)
-    console.log(`[STREAM-DEBUG][renderer] agent:complete received: isThinking=${_sc?.isThinking ?? 'no-session'}, thoughts=${_sc?.thoughts.length ?? 0}, isGenerating=${_sc?.isGenerating ?? 'no-session'}`)
 
     // Check if user is currently viewing this conversation
     const state = get()
@@ -1254,8 +1252,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleAgentThought: (data) => {
     const { conversationId, thought } = data
     console.log(`[ChatStore] handleAgentThought [${conversationId}]:`, thought.type, thought.id)
-    const _s = get().sessions.get(conversationId)
-    console.log(`[STREAM-DEBUG][renderer] agent:thought received: type=${thought.type} id=${thought.id}, isThinking was=${_s?.isThinking ?? 'no-session'}, thoughts so far=${_s?.thoughts.length ?? 0}`)
 
     set((state) => {
       const newSessions = new Map(state.sessions)

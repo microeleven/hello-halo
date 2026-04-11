@@ -131,6 +131,7 @@ export async function sendMessage(
       promptProfile: config.agent?.promptProfile,
       configDirMode: config.agent?.configDirMode,
       customConfigDir: config.agent?.customConfigDir,
+      enableTeams: config.agent?.enableTeams,
     })
 
     // Apply dynamic configurations (AI Browser, Thinking mode)

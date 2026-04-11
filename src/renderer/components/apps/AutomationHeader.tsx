@@ -188,12 +188,12 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
         {/* Action buttons */}
         {isAutomation && (
           <div className="flex items-center gap-0.5 flex-shrink-0">
-            {/* Trigger now */}
-            {!isPaused && !isWaiting && (
+            {/* Trigger now (also available when paused — backend auto-resumes) */}
+            {!isWaiting && (
               <button
                 onClick={() => triggerApp(appId)}
                 disabled={isRunning || isQueued}
-                title={isQueued ? t('Queued — waiting for a run slot') : t('Run now')}
+                title={isQueued ? t('Queued — waiting for a run slot') : isPaused ? t('Resume and run now') : t('Run now')}
                 className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors disabled:opacity-40"
               >
                 <Play className="w-3.5 h-3.5" />

@@ -22,6 +22,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const [promptProfile, setPromptProfileState] = useState<'official' | 'halo'>(
     config?.agent?.promptProfile ?? 'halo'
   )
+  const [enableTeams, setEnableTeamsState] = useState(config?.agent?.enableTeams ?? false)
 
   const handleMaxTurnsChange = async (value: number) => {
     const clamped = Math.max(10, Math.min(9999, value))
@@ -51,6 +52,21 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     } catch (error) {
       console.error('[AdvancedSection] Failed to update promptProfile:', error)
       setPromptProfileState(config?.agent?.promptProfile ?? 'halo')
+    }
+  }
+
+  const handleEnableTeamsChange = async (enabled: boolean) => {
+    setEnableTeamsState(enabled)
+    try {
+      const updatedConfig = {
+        ...config,
+        agent: { ...config?.agent, enableTeams: enabled }
+      } as HaloConfig
+      await api.setConfig({ agent: updatedConfig.agent })
+      setConfig(updatedConfig)
+    } catch (error) {
+      console.error('[AdvancedSection] Failed to update enableTeams:', error)
+      setEnableTeamsState(config?.agent?.enableTeams ?? false)
     }
   }
 
@@ -107,6 +123,31 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               </div>
             </label>
           </div>
+        </div>
+
+        {/* Agent Teams */}
+        <div className="flex items-center justify-between pt-4 border-t border-border">
+          <div className="flex-1">
+            <p className="font-medium">{t('Agent Teams')}</p>
+            <p className="text-sm text-muted-foreground">
+              {t('Enable multi-agent collaboration. When enabled, the AI can spawn teammate agents to work in parallel. Consumes additional tokens and context.')}
+            </p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
+            <input
+              type="checkbox"
+              checked={enableTeams}
+              onChange={(e) => handleEnableTeamsChange(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+              <div
+                className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                  enableTeams ? 'translate-x-5' : 'translate-x-0.5'
+                } mt-0.5`}
+              />
+            </div>
+          </label>
         </div>
 
         {/* Max Turns per Message */}

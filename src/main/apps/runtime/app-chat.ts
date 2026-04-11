@@ -36,6 +36,7 @@ import {
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { createCanUseTool } from '../../services/agent/permission-handler'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { processStream } from '../../services/agent/stream-processor'
@@ -59,6 +60,10 @@ import { getSpace } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId } from './session-store'
 import { getAppMemoryService, getActivityStore } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
+// Key builders live in shared/ so the renderer can import them without
+// depending on main-process modules.
+import { getAppChatConversationId, buildImSessionKey } from '../../../shared/apps/im-keys'
+export { getAppChatConversationId, buildImSessionKey }
 
 // ============================================
 // Types
@@ -98,28 +103,6 @@ export interface AppChatRequest {
 /** Fixed runId used for chat session JSONL storage */
 const CHAT_RUN_ID = 'chat'
 
-/**
- * Build the virtual conversationId for app chat.
- * Used for V2 session keying, active session tracking, and renderer event routing.
- */
-export function getAppChatConversationId(appId: string): string {
-  return `app-chat:${appId}`
-}
-
-/**
- * Build a fully-qualified session key for IM channel conversations.
- * Format: "app-chat:{appId}:{channel}:{chatType}:{chatId}"
- *
- * This ensures complete session isolation across channels, chat types, and chats.
- */
-export function buildImSessionKey(
-  appId: string,
-  channel: string,
-  chatType: 'direct' | 'group',
-  chatId: string
-): string {
-  return `app-chat:${appId}:${channel}:${chatType}:${chatId}`
-}
 
 /**
  * Derive a storage-safe JSONL runId from a conversationId.
@@ -275,6 +258,17 @@ export async function sendAppChatMessage(
   // Override for app chat context
   sdkOptions.systemPrompt = systemPrompt
 
+  // Non-native sessions (IM channels, etc.) are non-interactive — the user
+  // cannot respond to interactive tool prompts, so deny them preemptively
+  const defaultConvId = getAppChatConversationId(appId)
+  if (conversationId !== defaultConvId) {
+    sdkOptions.canUseTool = createCanUseTool({
+      spaceId,
+      conversationId,
+      nonInteractive: true,
+    })
+  }
+
   // ── Resolve space path and run ID early (needed for both session resume and JSONL) ──
   const spacePath = getSpace(spaceId)?.path ?? ''
   const chatRunId = deriveRunId(conversationId, appId)
@@ -414,12 +408,18 @@ export async function sendAppChatMessage(
     // Close session on error to force fresh session next time
     closeV2Session(conversationId)
 
-    // Destroy scoped browser context on error (will be recreated on next message)
-    const ctx = scopedContexts.get(conversationId)
-    if (ctx) {
-      ctx.destroy()
-      scopedContexts.delete(conversationId)
-      console.log(`[AppChat][${appId}] Scoped browser context destroyed (error)`)
+    // Destroy scoped browser context on error for IM sessions only.
+    // The native app-chat context (defaultConvId) is reused across messages — preserve it
+    // so the next message can resume with the same browser state (cookies, session storage).
+    // IM session contexts are per-conversation and can be recreated cheaply.
+    const defaultConvId = getAppChatConversationId(appId)
+    if (conversationId !== defaultConvId) {
+      const ctx = scopedContexts.get(conversationId)
+      if (ctx) {
+        ctx.destroy()
+        scopedContexts.delete(conversationId)
+        console.log(`[AppChat][${appId}] IM scoped browser context destroyed (error)`)
+      }
     }
   } finally {
     // Clean up active session (but keep V2 session for reuse)
@@ -445,24 +445,38 @@ export async function sendAppChatMessage(
 /**
  * Stop an active app chat generation.
  *
+ * Stops the native Halo chat session AND all IM channel sessions for this app.
  * Uses the same stop mechanism as the main agent (V2 session interrupt + drain).
  *
  * @param appId - App ID to stop chat for
  */
 export async function stopAppChat(appId: string): Promise<void> {
-  const conversationId = getAppChatConversationId(appId)
-  await stopGeneration(conversationId)
-  console.log(`[AppChat][${appId}] Generation stopped`)
+  const prefix = getAppChatConversationId(appId)
+  // Collect all conversation IDs belonging to this app:
+  // - "app-chat:{appId}" (native chat)
+  // - "app-chat:{appId}:{channel}:{chatType}:{chatId}" (IM sessions)
+  const toStop = Array.from(activeSessions.keys()).filter(
+    k => k === prefix || k.startsWith(prefix + ':')
+  )
+  for (const convId of toStop) {
+    await stopGeneration(convId)
+  }
+  console.log(`[AppChat][${appId}] Generation stopped (${toStop.length} session(s))`)
 }
 
 /**
  * Check if an app chat session is currently generating.
  *
+ * Returns true if the native chat OR any IM session for this app is active.
+ *
  * @param appId - App ID to check
  */
 export function isAppChatGenerating(appId: string): boolean {
-  const conversationId = getAppChatConversationId(appId)
-  return activeSessions.has(conversationId)
+  const prefix = getAppChatConversationId(appId)
+  for (const key of activeSessions.keys()) {
+    if (key === prefix || key.startsWith(prefix + ':')) return true
+  }
+  return false
 }
 
 /**

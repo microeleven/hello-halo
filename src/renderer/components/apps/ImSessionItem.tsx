@@ -14,6 +14,8 @@ import { Eraser, User, Users } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { buildImSessionKey } from '../../../shared/apps/im-keys'
+import { CHANNEL_LABELS } from './im-channel-labels'
 
 interface ImSessionItemProps {
   session: ImSessionRecord
@@ -23,31 +25,23 @@ interface ImSessionItemProps {
   onClearConfirm?: (session: ImSessionRecord) => void
 }
 
-/** Channel identifier → display label */
-const CHANNEL_LABELS: Record<string, string> = {
-  'wecom-bot': 'WeCom',
-  'feishu-bot': 'Feishu',
-  'dingtalk-bot': 'DingTalk',
-}
-
-/** Format relative time from epoch ms */
-function formatRelativeTime(epochMs: number): string {
+/** Format relative time from epoch ms — all strings go through t() for i18n. */
+function formatRelativeTime(epochMs: number, t: (key: string, options?: Record<string, unknown>) => string): string {
   const diff = Date.now() - epochMs
   const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return 'now'
-  if (minutes < 60) return `${minutes}m`
+  if (minutes < 1) return t('now')
+  if (minutes < 60) return t('{{count}}m', { count: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
+  if (hours < 24) return t('{{count}}h', { count: hours })
   const days = Math.floor(hours / 24)
-  return `${days}d`
+  return t('{{count}}d', { count: days })
 }
 
 export function ImSessionItem({ session, isSelected, onClick, onClearConfirm }: ImSessionItemProps) {
   const { t } = useTranslation()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
-  // Build conversationId to check streaming state
-  const conversationId = `app-chat:${session.appId}:${session.channel}:${session.chatType}:${session.chatId}`
+  const conversationId = buildImSessionKey(session.appId, session.channel, session.chatType, session.chatId)
   const isGenerating = useChatStore(s => s.getSession(conversationId).isGenerating)
 
   const displayName = session.customName || session.displayName || session.chatId
@@ -126,7 +120,7 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm }: 
           ) : (
             <>
               <span className="text-[10px] text-muted-foreground/50">
-                {formatRelativeTime(session.lastActiveAt)}
+                {formatRelativeTime(session.lastActiveAt, t)}
               </span>
               {onClearConfirm && !isGenerating && (
                 <button

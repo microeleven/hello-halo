@@ -54,7 +54,7 @@ export function SetupPage() {
       // Start the login flow - this opens the browser
       const result = await api.authStartLogin(providerType)
       if (!result.success) {
-        throw new Error(result.error || 'Failed to start login')
+        throw new Error(result.error || t('Failed to start login'))
       }
 
       const { loginUrl, state, userCode, verificationUri } = result.data as {
@@ -91,7 +91,7 @@ export function SetupPage() {
       // Complete the login - this polls for the token
       const completeResult = await api.authCompleteLogin(providerType, state)
       if (!completeResult.success) {
-        throw new Error(completeResult.error || 'Login failed')
+        throw new Error(completeResult.error || t('Login failed'))
       }
 
       // Success! Reload config and go to home
@@ -103,7 +103,7 @@ export function SetupPage() {
       setView('home')
     } catch (err) {
       console.error(`[SetupPage] ${providerType} login error:`, err)
-      setError(err instanceof Error ? err.message : 'Login failed')
+      setError(err instanceof Error ? err.message : t('Login failed'))
       setStep('select')
       setCurrentProvider(null)
     }
@@ -119,7 +119,7 @@ export function SetupPage() {
       const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, redirectUri)
 
       if (!windowResult.success) {
-        const errMsg = windowResult.error || 'Login failed'
+        const errMsg = windowResult.error || t('Login failed')
         if (errMsg === 'Login window closed') {
           setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: false } : null)
           return
@@ -139,7 +139,7 @@ export function SetupPage() {
       setClaudeLogin(prev => prev ? {
         ...prev,
         autoLoginInProgress: false,
-        error: err instanceof Error ? err.message : 'Login failed'
+        error: err instanceof Error ? err.message : t('Login failed')
       } : null)
     }
   }
@@ -171,7 +171,7 @@ export function SetupPage() {
       setClaudeLogin(prev => prev ? {
         ...prev,
         submitting: false,
-        error: err instanceof Error ? err.message : 'Login failed'
+        error: err instanceof Error ? err.message : t('Login failed')
       } : null)
     }
   }

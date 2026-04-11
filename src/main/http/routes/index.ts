@@ -33,7 +33,7 @@ import {
 import { getTempSpacePath, getSpacesDir, getConfig as getServiceConfig } from '../../services/config.service'
 import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getAppManager } from '../../apps/manager'
-import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, isAppChatGenerating, loadAppChatMessages, loadImChatMessages, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession } from '../../apps/runtime'
+import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, isAppChatGenerating, loadAppChatMessages, loadImChatMessages, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, dispatchInboundMessage } from '../../apps/runtime'
 import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/manager'
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
 import { readSessionMessages } from '../../apps/runtime/session-store'
@@ -790,11 +790,25 @@ export function registerApiRoutes(app: Express): void {
 
   // ===== IM Channel Routes (multi-instance) =====
 
-  // GET /api/im-channels/status — all instance statuses
+  // GET /api/im-channels/status — all instance statuses, or single instance when ?instanceId= is provided
   app.get('/api/im-channels/status', async (req: Request, res: Response) => {
     try {
       const manager = getImChannelManager()
-      res.json({ success: true, data: manager?.getAllStatuses() ?? [] })
+      const instanceId = req.query.instanceId as string | undefined
+      if (instanceId) {
+        if (!manager) {
+          res.json({ success: false, error: 'ImChannelManager not initialized' })
+          return
+        }
+        const status = manager.getInstanceStatus(instanceId)
+        if (!status) {
+          res.json({ success: false, error: `Instance "${instanceId}" not found` })
+          return
+        }
+        res.json({ success: true, data: status })
+      } else {
+        res.json({ success: true, data: manager?.getAllStatuses() ?? [] })
+      }
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -830,7 +844,6 @@ export function registerApiRoutes(app: Express): void {
       }
       const config = getServiceConfig()
       const instances = config.imChannels?.instances ?? []
-      const { dispatchInboundMessage } = require('../../apps/runtime/dispatch-inbound')
       manager.applyConfig(instances, (instanceId: string, appId: string, msg: any, reply: any) => {
         dispatchInboundMessage(msg, reply, appId, instanceId)
       })

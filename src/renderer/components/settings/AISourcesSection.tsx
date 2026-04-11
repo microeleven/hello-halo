@@ -307,7 +307,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, redirectUri)
 
       if (!windowResult.success) {
-        const errMsg = windowResult.error || 'Login failed'
+        const errMsg = windowResult.error || t('Login failed')
         if (errMsg === 'Login window closed') {
           // User cancelled — just reset the auto login state
           setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: false } : null)
@@ -324,7 +324,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       setClaudeLogin(prev => prev ? {
         ...prev,
         autoLoginInProgress: false,
-        error: err instanceof Error ? err.message : 'Login failed'
+        error: err instanceof Error ? err.message : t('Login failed')
       } : null)
     }
   }
@@ -352,7 +352,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       setClaudeLogin(prev => prev ? {
         ...prev,
         submitting: false,
-        error: err instanceof Error ? err.message : 'Login failed'
+        error: err instanceof Error ? err.message : t('Login failed')
       } : null)
     }
   }

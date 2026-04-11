@@ -18,6 +18,7 @@ import { useTranslation } from '../../i18n'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import { ImSessionItem } from './ImSessionItem'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 
@@ -69,7 +70,7 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
     try {
       const res = await api.appImChatClear(appId, spaceId, session.channel, session.chatType, session.chatId)
       if (res.success) {
-        const conversationId = `app-chat:${appId}:${session.channel}:${session.chatType}:${session.chatId}`
+        const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
         resetSession(conversationId)
         onSessionCleared?.(session)
       }

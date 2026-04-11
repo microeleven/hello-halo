@@ -991,9 +991,14 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // which is the same path as pause → resume in the UI.
         console.log(`[Runtime] app:trigger recovering from error state: ${appId}`)
         appManager.resume(appId)
+      } else if (app.status === 'paused') {
+        // Manual trigger from paused state: auto-resume so the user can
+        // run on demand without a separate resume step.  The scheduler
+        // is re-activated, and the trigger continues below.
+        console.log(`[Runtime] app:trigger auto-resuming paused app: ${appId}`)
+        appManager.resume(appId)
       } else if (app.status !== 'active') {
-        // Paused, waiting_user, and any other non-active states are not runnable.
-        // Paused apps must be explicitly resumed before they can be triggered.
+        // waiting_user and any other non-active states are not runnable.
         throw new AppNotRunnableError(appId, app.status)
       }
 

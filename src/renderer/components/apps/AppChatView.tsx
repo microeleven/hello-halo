@@ -28,6 +28,7 @@ import { CompactNotice } from '../chat/CompactNotice'
 import { InputArea } from '../chat/InputArea'
 import { useTranslation } from '../../i18n'
 import type { Message, ImageAttachment } from '../../types'
+import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 
 interface AppChatViewProps {
   /** App ID */
@@ -36,19 +37,11 @@ interface AppChatViewProps {
   spaceId: string
 }
 
-/**
- * Build the virtual conversationId for app chat.
- * Must match the backend's getAppChatConversationId().
- */
-function getConversationId(appId: string): string {
-  return `app-chat:${appId}`
-}
-
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function AppChatView({ appId, spaceId }: AppChatViewProps) {
   const { t } = useTranslation()
-  const conversationId = getConversationId(appId)
+  const conversationId = getAppChatConversationId(appId)
 
   // ── Persisted messages ──
   const [messages, setMessages] = useState<Message[]>([])

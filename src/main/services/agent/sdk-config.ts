@@ -60,6 +60,8 @@ export interface SdkEnvParams {
   configDirMode?: 'halo' | 'cc' | 'custom'
   /** Custom config dir path (when configDirMode === 'custom') */
   customConfigDir?: string
+  /** Enable Agent Teams (multi-agent collaboration) */
+  enableTeams?: boolean
 }
 
 /**
@@ -88,6 +90,8 @@ export interface BaseSdkOptionsParams {
   configDirMode?: 'halo' | 'cc' | 'custom'
   /** Custom config dir path (when configDirMode === 'custom') */
   customConfigDir?: string
+  /** Enable Agent Teams (multi-agent collaboration) */
+  enableTeams?: boolean
 }
 
 // ============================================
@@ -306,7 +310,8 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: '1',
 
     // Enable Agent Teams (multi-agent collaboration with named teammates)
-    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+    // Only set when explicitly enabled via Settings > Advanced
+    ...(params.enableTeams ? { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } : {}),
 
     // Windows: pass through Git Bash path (set by git-bash.service during startup)
     // This was stripped by getCleanUserEnv() along with all CLAUDE_* vars
@@ -416,6 +421,7 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     anthropicBaseUrl: credentials.anthropicBaseUrl,
     configDirMode: params.configDirMode,
     customConfigDir: params.customConfigDir,
+    enableTeams: params.enableTeams,
   })
 
   const cliPath = resolveClaudeCodeCliPath()

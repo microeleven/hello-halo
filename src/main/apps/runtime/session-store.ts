@@ -15,6 +15,7 @@
 
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { TRANSPARENT_TOOLS } from '../../services/agent/constants'
 
 // ============================================
 // Types
@@ -183,13 +184,7 @@ function createThoughtIdGenerator(): () => string {
   return () => `session-thought-${++idx}`
 }
 
-/**
- * Tools that do NOT break text continuity.
- * Matches stream-processor.ts TRANSPARENT_TOOLS — kept in sync manually.
- * When only transparent tools appear between two text blocks, the texts are
- * concatenated rather than the earlier text being demoted to a thought.
- */
-const TRANSPARENT_TOOLS = new Set(['TodoWrite'])
+// TRANSPARENT_TOOLS imported from services/agent/constants — single source of truth.
 
 /**
  * Convert stored SDK events into renderer-compatible Message[] with full thoughts.
