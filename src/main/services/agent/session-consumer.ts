@@ -57,6 +57,10 @@ export interface ConsumerHandle {
   /** Get thoughts accumulated in the most recently completed turn.
    * Used by session-manager to detect active team agents between turns. */
   getLastTurnThoughts(): Thought[]
+  /** Update the display model name used for thought parsing.
+   * Called by sendMessage to keep displayModel in sync after model switches
+   * without requiring a full session rebuild. */
+  updateDisplayModel(displayModel: string): void
 }
 
 /**
@@ -143,6 +147,12 @@ export function startConsumer(
     },
     getLastTurnThoughts() {
       return state.lastTurnThoughts
+    },
+    updateDisplayModel(newDisplayModel: string) {
+      if (state.displayModel !== newDisplayModel) {
+        console.log(`[Consumer][${conversationId}] Display model updated: ${state.displayModel} → ${newDisplayModel}`)
+        state.displayModel = newDisplayModel
+      }
     },
   }
 
@@ -246,6 +256,15 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           ` content=${result.finalContent.length} chars, thoughts=${result.thoughts.length},` +
           ` duration=${Date.now() - turnStartTime}ms`
         )
+
+        // Drain timeout: the abort-drain failed to receive a result within the
+        // safety timeout. The REPL pipe is dirty — continuing would read stale data.
+        // Break the consumer loop; next sendMessage detects the dead consumer (zombie)
+        // and creates a fresh session via getOrCreateV2Session.
+        if (result.drainTimedOut) {
+          console.warn(`[Consumer][${conversationId}] Drain timed out — REPL pipe is dirty, breaking for session rebuild`)
+          break
+        }
 
         // Check if API config changed during this turn (M5 fix).
         // If so, break the loop — the session will be rebuilt with new credentials

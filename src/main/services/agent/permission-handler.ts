@@ -1,9 +1,13 @@
 /**
  * Agent Module - Permission Handler
  *
- * All permissions are controlled via natural language prompts + dangerously-skip-permissions.
- * This handler only exists to respond to CLI permission requests (e.g. ExitPlanMode)
- * with a valid PermissionResult format. It auto-allows everything.
+ * canUseTool callback is only invoked for tools that require user interaction
+ * (e.g. AskUserQuestion, ExitPlanMode). Regular tools (Bash, Read, etc.) never
+ * reach this callback — they are controlled at the SDK level via:
+ *   - allowedTools:    whitelist of tools visible to the model (incl. MCP tools)
+ *   - disallowedTools: hard blacklist that cannot be bypassed (alwaysDenyRules)
+ *
+ * Guest session tool restrictions are applied in app-chat.ts before session creation.
  *
  * Special case: AskUserQuestion tool pauses execution and waits for user answers
  * via IPC, then returns the answers as updatedInput.

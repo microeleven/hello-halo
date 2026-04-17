@@ -965,6 +965,13 @@ export const api = {
     return httpRequest('GET', '/api/im-channels/providers')
   },
 
+  imChannelsPermissionDefaults: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsPermissionDefaults()
+    }
+    return httpRequest('GET', '/api/im-channels/permission-defaults')
+  },
+
   // ===== IM Sessions (会话管理) =====
   imSessionsList: async (appId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -1612,6 +1619,13 @@ export const api = {
       })
     }
     return httpRequest('POST', `/api/apps/${appId}/escalation/${escalationId}/respond`, response as Record<string, unknown>)
+  },
+
+  appContinueRun: async (appId: string, runId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appContinueRun({ appId, runId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/continue`)
   },
 
   appUpdateConfig: async (appId: string, config: Record<string, unknown>): Promise<ApiResponse> => {

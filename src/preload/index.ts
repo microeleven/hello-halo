@@ -354,6 +354,7 @@ export interface HaloAPI {
   imChannelsReconnect: (instanceId: string) => Promise<IpcResponse>
   imChannelsReload: () => Promise<IpcResponse>
   imChannelsProviders: () => Promise<IpcResponse>
+  imChannelsPermissionDefaults: () => Promise<IpcResponse>
 
   // IM Sessions (会话管理)
   imSessionsList: (appId?: string) => Promise<IpcResponse>
@@ -375,6 +376,7 @@ export interface HaloAPI {
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
+  appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
   appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
@@ -717,6 +719,7 @@ const api: HaloAPI = {
   imChannelsReconnect: (instanceId: string) => ipcRenderer.invoke('im-channels:reconnect', instanceId),
   imChannelsReload: () => ipcRenderer.invoke('im-channels:reload'),
   imChannelsProviders: () => ipcRenderer.invoke('im-channels:providers'),
+  imChannelsPermissionDefaults: () => ipcRenderer.invoke('im-channels:permission-defaults'),
 
   // IM Sessions (会话管理)
   imSessionsList: (appId) => ipcRenderer.invoke('im-sessions:list', appId),
@@ -738,6 +741,7 @@ const api: HaloAPI = {
   appGetActivity: (input) => ipcRenderer.invoke('app:get-activity', input),
   appGetSession: (input) => ipcRenderer.invoke('app:get-session', input),
   appRespondEscalation: (input) => ipcRenderer.invoke('app:respond-escalation', input),
+  appContinueRun: (input) => ipcRenderer.invoke('app:continue-run', input),
   appUpdateConfig: (input) => ipcRenderer.invoke('app:update-config', input),
   appUpdateFrequency: (input) => ipcRenderer.invoke('app:update-frequency', input),
   appUpdateOverrides: (input) => ipcRenderer.invoke('app:update-overrides', input),

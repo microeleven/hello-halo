@@ -26,6 +26,39 @@
 import type { InboundMessage, ReplyHandle } from './inbound-message'
 
 // ============================================
+// GuestPolicy (IM permission control)
+// ============================================
+
+/**
+ * Permission policy for non-owner (guest) users in IM channels.
+ *
+ * White-list model: only explicitly listed tools are allowed.
+ * When `allowedTools` is undefined, all tools are allowed (no restriction).
+ * When `allowedTools` is an empty array, no tools are allowed.
+ *
+ * At runtime, this list is split by prefix:
+ *   - Built-in tools (no prefix) → SDK `tools` option (API-level tool visibility)
+ *   - MCP tools (`mcp__*`)       → SDK `allowedTools` (permission pre-approval;
+ *                                   non-interactive sessions auto-deny the rest)
+ *
+ * Used by ImChannelInstanceConfig (persisted) and ImPermissionContext (runtime).
+ */
+export interface GuestPolicy {
+  /**
+   * Tool names the guest is allowed to use (white-list).
+   * Includes both SDK built-in tools (Read, Grep, Glob, etc.)
+   * and MCP tool names (prefixed with `mcp__<server>__<tool>`).
+   *
+   * Only safe built-in tools should be listed here — dangerous tools
+   * (Bash, Write, Edit, NotebookEdit) are excluded from the UI selector.
+   *
+   * undefined = all tools allowed (no tool restriction)
+   * []        = no tools allowed
+   */
+  allowedTools?: string[]
+}
+
+// ============================================
 // ImChannelInstanceConfig (Persisted)
 // ============================================
 
@@ -63,6 +96,36 @@ export interface ImChannelInstanceConfig {
    * New instances created via UI default to 'group' for security.
    */
   replyScope?: 'all' | 'group' | 'direct'
+
+  /**
+   * Master switch for permission control on this channel instance.
+   *
+   * false/undefined = no restrictions, everyone has full access (personal use default).
+   * true            = owners/guestPolicy are enforced.
+   *
+   * When false, the `owners` and `guestPolicy` fields are stored but ignored at runtime,
+   * so toggling the switch off doesn't lose user configuration.
+   */
+  permissionEnabled?: boolean
+
+  /**
+   * Owner user IDs for this channel instance (platform-side user IDs).
+   * Owners have unrestricted access to all tools and paths.
+   * Only effective when `permissionEnabled` is true.
+   *
+   * undefined or [] = everyone is treated as owner (no restriction).
+   * Non-empty array  = only listed IDs are owners; others are guests.
+   *
+   * IDs are platform-specific: WeCom userid, Feishu open_id, DingTalk staffId, etc.
+   */
+  owners?: string[]
+
+  /**
+   * Permission policy applied to non-owner (guest) users.
+   * Only effective when `permissionEnabled` is true and `owners` is a non-empty array.
+   * When undefined, guests have no tool or path access (deny-all default).
+   */
+  guestPolicy?: GuestPolicy
 }
 
 // ============================================

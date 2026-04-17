@@ -873,6 +873,17 @@ export function registerApiRoutes(app: Express): void {
     }
   })
 
+  // GET /api/im-channels/permission-defaults — product-level permission defaults
+  app.get('/api/im-channels/permission-defaults', async (req: Request, res: Response) => {
+    try {
+      const { getImChannelsPermissionDefaults } = await import('../../services/ai-sources/auth-loader')
+      const defaults = getImChannelsPermissionDefaults()
+      res.json({ success: true, data: defaults ?? null })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // ===== IM Sessions Routes =====
 
   // GET /api/im-sessions — list IM sessions, optional ?appId= filter
@@ -1335,6 +1346,24 @@ export function registerApiRoutes(app: Express): void {
       }
       await runtime.respondToEscalation(appId, entryId, response)
       console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/runs/:runId/continue — user-initiated continue for premature-stop errors
+  app.post('/api/apps/:appId/runs/:runId/continue', async (req: Request, res: Response) => {
+    try {
+      const { appId, runId } = req.params
+      if (!appId || !runId) {
+        res.status(400).json({ success: false, error: 'Missing appId or runId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      await runtime.continueFailedRun(appId, runId)
+      console.log('[HTTP] POST /api/apps/%s/runs/%s/continue', appId, runId)
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

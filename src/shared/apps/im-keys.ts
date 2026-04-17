@@ -36,3 +36,19 @@ export function buildImSessionKey(
 ): string {
   return `app-chat:${appId}:${channel}:${chatType}:${chatId}`
 }
+
+/**
+ * Check whether a conversationId belongs to an IM channel session.
+ *
+ * IM keys have the form "app-chat:{appId}:{channel}:{chatType}:{chatId}"
+ * (5 segments, 4 colons).  Other key formats in the system:
+ *   - Native Halo chat:  "app-chat:{appId}"          (2 segments, 1 colon)
+ *   - Automation run:     "app-run-{runId}"           (0 colons)
+ *
+ * Keeping this predicate next to buildImSessionKey ensures the detection
+ * logic stays in sync with the key format (single source of truth).
+ */
+export function isImSessionKey(conversationId: string): boolean {
+  // IM keys always start with "app-chat:" and have exactly 5 colon-separated segments
+  return conversationId.startsWith('app-chat:') && conversationId.split(':').length === 5
+}

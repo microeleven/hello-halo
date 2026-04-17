@@ -34,6 +34,8 @@ export interface ReportToolContext {
   notificationLevel?: 'all' | 'important' | 'none'
   /** External notification channels from output.notify.channels */
   notifyChannels?: NotificationChannelType[]
+  /** Absolute path to the plans directory for file-based data_path guidance */
+  plansDir?: string
 }
 
 /** Callback invoked when an escalation entry is created */
@@ -69,8 +71,8 @@ export function createReportToolServer(
   onEscalation?: OnEscalation,
   emitEntry?: (entry: ActivityEntry) => void
 ): SdkMcpServer {
-  const reportTool = tool(
-    'report_to_user',
+  // Build tool description with optional plans directory guidance
+  const baseDescription =
     'Write an entry to the Activity Thread so the user knows what happened. ' +
     'ALWAYS call this at the end of every execution.\n\n' +
     'Example call: { "type": "run_complete", "summary": "💧 Time to drink water! Stay hydrated." }\n\n' +
@@ -80,7 +82,20 @@ export function createReportToolServer(
     '- "milestone": Important finding mid-task\n' +
     '- "escalation": Need user decision before continuing\n' +
     '- "output": Produced a file or report\n\n' +
-    'For escalation: also provide "question" field. After escalation, stop execution.',
+    'For escalation: also provide "question" field. After escalation, stop execution.\n\n' +
+    'For detailed content (plans, proposals, long reports):\n' +
+    '1. Write content to a .md file first (use Write tool)\n' +
+    '2. Pass the absolute file path as data_path\n' +
+    'This keeps the tool call lightweight and lets you Edit the file for revisions.'
+
+  // Inject the concrete plans directory path so the AI knows exactly where to write
+  const plansDirGuidance = runContext.plansDir
+    ? `\nBy default, write files to: ${runContext.plansDir}`
+    : ''
+
+  const reportTool = tool(
+    'report_to_user',
+    baseDescription + plansDirGuidance,
     {
       type: z.enum([
         'run_complete',
@@ -97,8 +112,12 @@ export function createReportToolServer(
         'Do not include raw JSON or code blocks — unless the user explicitly requires it.'
       ),
       data: z.string().optional().describe(
-        'Optional detailed markdown. Choose whichever format best serves readability ' +
-        '— tables, lists, headings, etc. Shown below the summary.'
+        'Optional short inline markdown. For long content, use data_path instead.'
+      ),
+      data_path: z.string().optional().describe(
+        'Absolute path to a markdown file you have already written. ' +
+        'Use this instead of "data" for detailed plans, proposals, or long reports. ' +
+        'To revise content later, Edit the file and re-escalate with the same path.'
       ),
       question: z.string().optional().describe(
         'Only for escalation: the question to ask the user.'
@@ -129,6 +148,7 @@ export function createReportToolServer(
       console.log(
         `[Runtime][${runTag}] report_to_user called: type=${safeType}${input.type !== safeType ? ` (original: ${input.type})` : ''}, ` +
         `summary="${summaryPreview}"` +
+        (input.data_path ? `, data_path="${input.data_path}"` : '') +
         (input.question ? `, question="${input.question.slice(0, 60)}"` : '') +
         (input.choices ? `, choices=${input.choices.length}` : '')
       )
@@ -147,6 +167,7 @@ export function createReportToolServer(
 
       // Optional fields
       if (input.data) content.data = input.data
+      if (input.data_path) content.dataPath = input.data_path
       if (input.question) content.question = input.question
       if (input.choices) content.choices = input.choices
 

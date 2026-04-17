@@ -329,6 +329,20 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     }
   }
 
+  function buildContinueTriggerContext(
+    app: InstalledApp,
+    sessionId?: string
+  ): TriggerContext {
+    return {
+      type: 'continue_followup',
+      description: `User-initiated continue for "${app.spec.name}". ` +
+        `Time: ${new Date().toISOString()}`,
+      continue: {
+        sessionId,
+      },
+    }
+  }
+
   // ── Helper: Broadcast app state change ──────────────
   function broadcastAppStatus(appId: string): void {
     try {
@@ -350,7 +364,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   // ── Helper: Execute with concurrency control ────────
   async function executeWithConcurrency(
     app: InstalledApp,
-    trigger: TriggerContext
+    trigger: TriggerContext,
+    continueOptions?: { existingRunId?: string; existingSessionKey?: string }
   ): Promise<AppRunResult> {
     // Try to acquire a slot immediately without blocking.
     // If no slot is available, transition to 'queued' state and block.
@@ -393,6 +408,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         memory,
         abortSignal: abortController.signal,
         emitEntry: emitActivityEntry,
+        existingRunId: continueOptions?.existingRunId,
+        existingSessionKey: continueOptions?.existingSessionKey,
       })
 
       const runTag = result.runId.slice(0, 8)
@@ -1173,6 +1190,59 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           )
         })
       }
+    },
+
+    // ── User-initiated Continue ─────────────────────
+
+    async continueFailedRun(appId: string, runId: string): Promise<void> {
+      const app = appManager.getApp(appId)
+      if (!app) {
+        throw new Error(`App not found: ${appId}`)
+      }
+
+      const run = store.getRun(runId)
+      if (!run) {
+        throw new Error(`Run not found: ${runId}`)
+      }
+      if (run.status !== 'error') {
+        throw new Error(`Run ${runId} is not in error state (status: ${run.status})`)
+      }
+
+      // Guard: only allow continue on runs that ended due to premature LLM termination.
+      // Runs that failed for other reasons (runtime exception, AI-reported error) should
+      // be retried via triggerManually, not continued from a broken session.
+      if (!run.sessionId) {
+        console.warn(
+          `[Runtime] continueFailedRun: run ${runId} has no sessionId — ` +
+          `falling back to fresh run. This is unexpected for a premature-stop error.`
+        )
+      }
+
+      const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
+      if (appIsRunning) {
+        throw new Error(`App ${appId} already has a running execution — cannot continue simultaneously`)
+      }
+
+      console.log(
+        `[Runtime] User-initiated continue: app=${appId}, run=${runId}, ` +
+        `sessionId=${run.sessionId ?? 'none'}`
+      )
+
+      // Reopen the run record: error → running.
+      // This causes getAppState() to return status:'running' + runningRunId=runId
+      // so the UI immediately reflects the live state without a new timeline entry.
+      store.reopenRun(runId)
+      broadcastAppStatus(appId)
+
+      const trigger = buildContinueTriggerContext(app, run.sessionId)
+
+      // Execute asynchronously — continueFailedRun returns once the run is queued.
+      executeWithConcurrency(app, trigger, {
+        existingRunId: run.runId,
+        existingSessionKey: run.sessionKey,
+      }).catch((err) => {
+        console.error(`[Runtime] Continue run failed: app=${appId}, run=${runId}:`, err)
+      })
     },
 
     // ── Activity Queries ────────────────────────────

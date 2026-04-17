@@ -39,6 +39,7 @@ import { buildSystemPromptWithAIBrowser } from './system-prompt'
 import {
   getOrCreateV2Session,
   closeV2Session,
+  updateConsumerDisplayModel,
 } from './session-manager'
 import {
   formatCanvasContext,
@@ -160,6 +161,11 @@ export async function sendMessage(
     )
 
     sessionObtained = true
+
+    // Ensure consumer's displayModel is up-to-date.
+    // When the session is reused (no rebuild), the consumer retains the old displayModel.
+    // This keeps thought parsing ("Connected | Model: X") in sync after model switches.
+    updateConsumerDisplayModel(conversationId, resolvedCredentials.displayModel)
 
     // Dynamic runtime parameter adjustment
     try {

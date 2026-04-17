@@ -11,6 +11,7 @@ import { Loader2, MessageSquare, CheckCircle2 } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
+import { useDataContent } from '../../hooks/useDataContent'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 
 interface EscalationCardProps {
@@ -28,7 +29,7 @@ export function EscalationCard({ entry, appId }: EscalationCardProps) {
   const resolved = !!entry.userResponse
   const question = entry.content.question ?? entry.content.summary
   const choices = entry.content.choices ?? []
-  const data = typeof entry.content.data === 'string' ? entry.content.data : undefined
+  const data = useDataContent(entry.content)
 
   async function handleChoice(choice: string) {
     setIsSubmitting(true)

@@ -30,7 +30,15 @@ import type {
 import type {
   ImChannelInstanceConfig,
   ImChannelInstanceStatus,
+  GuestPolicy,
 } from '../../../shared/types/im-channel'
+
+/** Product-level permission defaults (from IPC). Mirrors auth-loader.ImChannelsPermissionDefaults. */
+interface PermissionDefaults {
+  defaultEnabled?: boolean
+  defaultGuestAccess?: boolean
+  defaultGuestPolicy?: { allowedTools?: string[] }
+}
 
 // ============================================
 // Types
@@ -655,12 +663,277 @@ function InstanceCard({
             </label>
           </div>
 
+          {/* ── Permission Control ── */}
+          <PermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} />
+
           {/* Connection status */}
           {isEnabled && (
             <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
               <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// Permission Section (permissionEnabled + owners + guestPolicy)
+// ============================================
+
+/**
+ * Safe built-in tools that can be granted to guests.
+ * Dangerous tools (Bash, Write, Edit, NotebookEdit) are intentionally excluded —
+ * they are never selectable in the UI and invisible to guest sessions at the SDK level.
+ */
+const GUEST_SAFE_BUILTIN_TOOLS = [
+  { name: 'Read', group: 'file' },
+  { name: 'Glob', group: 'file' },
+  { name: 'Grep', group: 'file' },
+  { name: 'WebFetch', group: 'network' },
+  { name: 'WebSearch', group: 'network' },
+  { name: 'Agent', group: 'other' },
+  { name: 'TodoWrite', group: 'other' },
+] as const
+
+/** Group labels for tool tags */
+const TOOL_GROUP_LABELS: Record<string, string> = {
+  file: 'File Read',
+  network: 'Network',
+  other: 'Other',
+}
+
+interface PermissionSectionProps {
+  instance: ImChannelInstanceConfig
+  /** Immediate save (for toggles) */
+  onChange: (instance: ImChannelInstanceConfig) => void
+  /** Debounced save (for text fields — 500ms delay, same as config fields) */
+  onDebouncedChange: (instance: ImChannelInstanceConfig) => void
+}
+
+function PermissionSection({ instance, onChange, onDebouncedChange }: PermissionSectionProps) {
+  const { t } = useTranslation()
+  const permissionEnabled = instance.permissionEnabled ?? false
+  const owners = instance.owners ?? []
+  const hasOwners = owners.length > 0
+  const guestPolicy = instance.guestPolicy
+  const guestAccessEnabled = hasOwners && guestPolicy !== undefined
+
+  // Local draft state for text fields (avoids cursor jumping during debounce)
+  const [ownersDraft, setOwnersDraft] = useState<string | null>(null)
+  const [mcpDraft, setMcpDraft] = useState<string | null>(null)
+
+  // Derive display values (draft takes priority over stored value)
+  const currentAllowedTools = guestPolicy?.allowedTools ?? []
+  const builtinNames = new Set(GUEST_SAFE_BUILTIN_TOOLS.map(t => t.name))
+  const selectedBuiltinTools = new Set(currentAllowedTools.filter(t => builtinNames.has(t)))
+  const storedMcpText = currentAllowedTools.filter(t => t.startsWith('mcp__')).join(', ')
+
+  const ownersDisplay = ownersDraft ?? owners.join(', ')
+  const mcpDisplay = mcpDraft ?? storedMcpText
+
+  // ── Handlers ──
+
+  const handlePermissionToggle = () => {
+    onChange({ ...instance, permissionEnabled: !permissionEnabled })
+  }
+
+  const handleOwnersChange = (value: string) => {
+    setOwnersDraft(value)
+    const parsed = value
+      .split(/[,\n]/)
+      .map(s => s.trim())
+      .filter(Boolean)
+    onDebouncedChange({
+      ...instance,
+      owners: parsed.length > 0 ? parsed : undefined,
+    })
+  }
+
+  const handleOwnersBlur = () => {
+    // Clear draft on blur — next render picks up the committed value
+    setOwnersDraft(null)
+  }
+
+  const handleGuestAccessToggle = () => {
+    if (guestAccessEnabled) {
+      onChange({ ...instance, guestPolicy: undefined })
+    } else {
+      onChange({ ...instance, guestPolicy: { allowedTools: [] } })
+    }
+  }
+
+  const buildAllowedTools = (builtinSet: Set<string>, mcpText: string): string[] => {
+    const mcpParsed = mcpText
+      .split(/[,\n]/)
+      .map(s => s.trim())
+      .filter(Boolean)
+    return [...Array.from(builtinSet), ...mcpParsed]
+  }
+
+  const handleBuiltinToolToggle = (toolName: string) => {
+    const newSet = new Set(selectedBuiltinTools)
+    if (newSet.has(toolName)) {
+      newSet.delete(toolName)
+    } else {
+      newSet.add(toolName)
+    }
+    const merged = buildAllowedTools(newSet, mcpDraft ?? storedMcpText)
+    // Toggle is immediate
+    onChange({ ...instance, guestPolicy: { ...guestPolicy, allowedTools: merged } })
+  }
+
+  const handleMcpToolsChange = (value: string) => {
+    setMcpDraft(value)
+    const merged = buildAllowedTools(selectedBuiltinTools, value)
+    onDebouncedChange({ ...instance, guestPolicy: { ...guestPolicy, allowedTools: merged } })
+  }
+
+  const handleMcpBlur = () => {
+    setMcpDraft(null)
+  }
+
+  // ── Render ──
+
+  return (
+    <div className="space-y-2">
+      {/* Master toggle */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
+          <p className="text-xs text-muted-foreground/70">
+            {permissionEnabled
+              ? t('Restrict access by owner/guest roles')
+              : t('Everyone has full access')}
+          </p>
+        </div>
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input
+            type="checkbox"
+            checked={permissionEnabled}
+            onChange={handlePermissionToggle}
+            className="sr-only peer"
+          />
+          <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+            <div
+              className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                permissionEnabled ? 'translate-x-5' : 'translate-x-0.5'
+              } mt-0.5`}
+            />
+          </div>
+        </label>
+      </div>
+
+      {/* Permission details (only when enabled) */}
+      {permissionEnabled && (
+        <div className="space-y-3 pl-1 animate-in slide-in-from-top-1 duration-150">
+          {/* Owners */}
+          <div className="space-y-1">
+            <label className="text-sm text-muted-foreground">
+              {t('Owner User IDs')}
+            </label>
+            <textarea
+              value={ownersDisplay}
+              onChange={(e) => handleOwnersChange(e.target.value)}
+              onBlur={handleOwnersBlur}
+              placeholder={t('e.g. zhangsan, lisi (comma separated)')}
+              rows={2}
+              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('Owners have full access. Others are guests.')}
+            </p>
+          </div>
+
+          {/* Guest access toggle (only when owners are set) */}
+          {hasOwners && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm text-muted-foreground">{t('Guest Access')}</p>
+                  <p className="text-xs text-muted-foreground/70">
+                    {guestAccessEnabled
+                      ? t('Guests have limited access')
+                      : t('Guests have no access')}
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={guestAccessEnabled}
+                    onChange={handleGuestAccessToggle}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                        guestAccessEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                      } mt-0.5`}
+                    />
+                  </div>
+                </label>
+              </div>
+
+              {/* Tool selection (only when guest access is enabled) */}
+              {guestAccessEnabled && (
+                <div className="space-y-2">
+                  <label className="text-sm text-muted-foreground">
+                    {t('Allowed Tools')}
+                  </label>
+
+                  {/* Built-in tool tags grouped */}
+                  {Object.entries(TOOL_GROUP_LABELS).map(([group, label]) => {
+                    const tools = GUEST_SAFE_BUILTIN_TOOLS.filter(t => t.group === group)
+                    if (tools.length === 0) return null
+                    return (
+                      <div key={group} className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-muted-foreground/70 w-14 sm:w-16 shrink-0">
+                          {t(label)}
+                        </span>
+                        {tools.map(tool => {
+                          const isSelected = selectedBuiltinTools.has(tool.name)
+                          return (
+                            <button
+                              key={tool.name}
+                              type="button"
+                              onClick={() => handleBuiltinToolToggle(tool.name)}
+                              className={`px-2 py-0.5 text-xs rounded-md border transition-colors ${
+                                isSelected
+                                  ? 'bg-primary/15 text-primary border-primary/30'
+                                  : 'bg-muted text-muted-foreground border-border hover:border-primary/20'
+                              }`}
+                            >
+                              {tool.name}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )
+                  })}
+
+                  <p className="text-xs text-muted-foreground/60 mt-1">
+                    {t('Bash, Write, Edit are always restricted for guests.')}
+                  </p>
+
+                  {/* MCP tools text input */}
+                  <div className="space-y-1 mt-2">
+                    <label className="text-xs text-muted-foreground/70">
+                      {t('MCP Tools (advanced)')}
+                    </label>
+                    <textarea
+                      value={mcpDisplay}
+                      onChange={(e) => handleMcpToolsChange(e.target.value)}
+                      onBlur={handleMcpBlur}
+                      placeholder={t('e.g. mcp__web-search__web_search')}
+                      rows={1}
+                      className="w-full bg-muted border border-border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary resize-none font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -849,12 +1122,22 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
+  const [permissionDefaults, setPermissionDefaults] = useState<PermissionDefaults | null>(null)
 
   // Load automation apps for the digital human selector
   const { apps, loadApps } = useAppsStore()
   const automationApps = apps.filter(a => a.spec.type === 'automation')
 
   useEffect(() => { loadApps() }, [loadApps])
+
+  // Load product-level permission defaults (once)
+  useEffect(() => {
+    api.imChannelsPermissionDefaults()
+      .then((res: { success?: boolean; data?: PermissionDefaults | null }) => {
+        if (res.success && res.data) setPermissionDefaults(res.data)
+      })
+      .catch(() => { /* defaults stay null — no restrictions */ })
+  }, [])
 
   // Poll IM channel statuses
   useEffect(() => {
@@ -913,6 +1196,8 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   }, [instances, saveInstances])
 
   const handleAddInstance = useCallback(() => {
+    // Apply product-level permission defaults for new instances
+    const pd = permissionDefaults
     const newInstance: ImChannelInstanceConfig = {
       id: generateId(),
       type: 'wecom-bot',
@@ -920,11 +1205,17 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       appId: '',
       config: { botId: '', secret: '', wsUrl: '' },
       replyScope: 'group', // Secure default for new instances
+      permissionEnabled: pd?.defaultEnabled ?? false,
+      ...(pd?.defaultEnabled ? {
+        guestPolicy: pd.defaultGuestAccess
+          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
+          : undefined,
+      } : {}),
     }
     const newInstances = [...instances, newInstance]
     saveInstances(newInstances)
     setExpandedInstances(prev => new Set(prev).add(newInstance.id))
-  }, [instances, saveInstances])
+  }, [instances, saveInstances, permissionDefaults])
 
   const handleDeleteInstance = useCallback((instanceId: string) => {
     const newInstances = instances.filter(i => i.id !== instanceId)

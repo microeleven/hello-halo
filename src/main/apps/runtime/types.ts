@@ -12,7 +12,7 @@ import type { RunOutcome, AppStatus } from '../manager'
 // ============================================
 
 /** What caused a run to execute */
-export type TriggerType = 'schedule' | 'event' | 'manual' | 'escalation_followup'
+export type TriggerType = 'schedule' | 'event' | 'manual' | 'escalation_followup' | 'continue_followup'
 
 /** Structured trigger context passed to the AI */
 export interface TriggerContext {
@@ -28,6 +28,11 @@ export interface TriggerContext {
     originalQuestion: string
     userResponse: EscalationResponse
     /** V2 session ID from the escalation run, used to restore conversation context */
+    sessionId?: string
+  }
+  /** Continue context (for user-initiated continue after premature LLM termination) */
+  continue?: {
+    /** V2 session ID from the failed run, used to restore full conversation context */
     sessionId?: string
   }
 }
@@ -100,8 +105,10 @@ export interface ActivityEntryContent {
   error?: string
   /** Next retry time (for run_error) */
   nextRetryMs?: number
-  /** Structured output data (tables, lists) */
+  /** Structured output data (tables, lists, short inline markdown) */
   data?: unknown
+  /** Absolute path to a markdown file written by AI (replaces inline data for large content) */
+  dataPath?: string
   /** Question for the user (escalation only) */
   question?: string
   /** Preset choices for escalation */
@@ -269,6 +276,18 @@ export interface AppRuntimeService {
     entryId: string,
     response: EscalationResponse
   ): Promise<void>
+
+  /**
+   * User-initiated continue for a run that ended prematurely (LLM stopped without
+   * calling report_to_user and all auto-retries were exhausted).
+   *
+   * Reopens the same run (error → running), restores the V2 session, sends
+   * "Continue." as the initial message, then resumes the standard auto-retry
+   * loop (up to MAX_AUTO_CONTINUES attempts).
+   *
+   * @throws Error if the run is not found or not in error state
+   */
+  continueFailedRun(appId: string, runId: string): Promise<void>
 
   // ── Activity Queries ────────────────────────
 

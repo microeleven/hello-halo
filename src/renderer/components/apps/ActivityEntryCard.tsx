@@ -9,11 +9,14 @@
  * milestone, escalation, output.
  */
 
-import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight } from 'lucide-react'
+import { useState } from 'react'
+import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight, Play } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { EscalationCard } from './EscalationCard'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useAppsStore } from '../../stores/apps.store'
+import { useDataContent } from '../../hooks/useDataContent'
 import { useTranslation } from '../../i18n'
 
 interface ActivityEntryCardProps {
@@ -105,13 +108,35 @@ function hasSessionLink(entry: ActivityEntry): boolean {
 export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: ActivityEntryCardProps) {
   const { t } = useTranslation()
   const openSessionDetail = useAppsPageStore(s => s.openSessionDetail)
+  const continueApp = useAppsStore(s => s.continueApp)
+  const appState = useAppsStore(s => s.appStates[appId])
+  const [isContinuing, setIsContinuing] = useState(false)
+
   const { content } = entry
   const durationMs = content.durationMs
   const canViewProcess = hasSessionLink(entry)
+  const resolvedData = useDataContent(content)
+
+  /** Whether this run_error was due to premature AI termination (no report_to_user call) */
+  const isPrematureTermination =
+    entry.type === 'run_error' && content.error === 'report_to_user not called'
+
+  /** Disable Continue while already running/queued or a continue is in-flight */
+  const isAppBusy = appState?.status === 'running' || appState?.status === 'queued'
 
   const handleViewProcess = () => {
     if (entry.sessionKey) {
       openSessionDetail(appId, entry.runId, entry.sessionKey)
+    }
+  }
+
+  const handleContinue = async () => {
+    if (isContinuing || isAppBusy) return
+    setIsContinuing(true)
+    try {
+      await continueApp(appId, entry.runId)
+    } finally {
+      setIsContinuing(false)
     }
   }
 
@@ -156,11 +181,11 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
           <div className="space-y-1.5">
             <MarkdownRenderer content={content.summary} className="text-sm" />
 
-            {/* Detailed data (if present) */}
-            {content.data != null && typeof content.data === 'string' && (
-              <MarkdownRenderer content={content.data} className="text-sm" />
+            {/* Detailed data: file-based (dataPath) or inline */}
+            {resolvedData && (
+              <MarkdownRenderer content={resolvedData} className="text-sm" />
             )}
-            {content.data != null && typeof content.data === 'object' && (
+            {!resolvedData && content.data != null && typeof content.data === 'object' && (
               <pre className="text-xs bg-secondary rounded-md p-2 overflow-x-auto text-muted-foreground">
                 {JSON.stringify(content.data, null, 2)}
               </pre>
@@ -181,6 +206,20 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
             {/* Error details for run_error */}
             {entry.type === 'run_error' && content.error && (
               <p className="text-xs text-red-400">{content.error}</p>
+            )}
+
+            {/* Continue button — only for premature AI termination */}
+            {isPrematureTermination && (
+              <button
+                onClick={handleContinue}
+                disabled={isContinuing || isAppBusy}
+                className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md
+                  bg-primary/10 text-primary hover:bg-primary/20 transition-colors
+                  disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Play className="w-3 h-3" />
+                {isContinuing ? t('Continuing…') : t('Continue')}
+              </button>
             )}
           </div>
         )}

@@ -28,6 +28,7 @@ import {
   getApiCredentials,
   getDbMcpServers
 } from './helpers'
+import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
@@ -474,20 +475,30 @@ export async function getOrCreateV2Session(
       const needsConfigRebuild = config && needsSessionRebuild(existing, config)
 
       if (needsCredentialRebuild || needsConfigRebuild) {
-        // Before rebuilding, check whether the CC subprocess has active team agents.
-        // The consumer appears idle between turns (getActiveSessionState() == null) but
-        // the CC subprocess may be waiting for parallel agents to report back — their
-        // results arrive as a future autonomous turn. Killing the session now would
-        // abort all in-flight agent tasks.
-        //
-        // When active team agents are detected:
-        //   - Clear any pending rebuild flag so the consumer keeps running through the
-        //     team's remaining turns without breaking early.
-        //   - Return the existing session: the new message is queued and processed on
-        //     the current session (may run on old model/config for that one turn).
-        //   - After team tasks complete, the credential/config mismatch persists, so
-        //     the next sendMessage will trigger a clean rebuild at that point.
         const consumer = consumers.get(conversationId)
+
+        // Guard 1: Consumer is actively processing a turn (mid-API-call, mid-tool, etc.)
+        // Killing it now would destroy the in-flight response — the user loses the answer.
+        // Instead, mark for deferred rebuild: the consumer checks pendingConsumerRebuilds
+        // after each turn completes (session-consumer.ts consumePendingRebuild) and breaks
+        // its loop, triggering a clean rebuild on the next sendMessage.
+        const isActivelyProcessing = consumer?.isRunning && consumer.getActiveSessionState() !== null
+        if (isActivelyProcessing) {
+          pendingConsumerRebuilds.add(conversationId)
+          const reason = needsCredentialRebuild
+            ? `gen ${existing.credentialsGeneration}→${currentGen}`
+            : 'config changed'
+          console.log(
+            `[Agent][${conversationId}] Session rebuild deferred — consumer is actively processing a turn ` +
+            `(${reason}). Will rebuild after turn completes.`
+          )
+          existing.lastUsedAt = Date.now()
+          return existing.session
+        }
+
+        // Guard 2: Consumer is idle between turns but CC subprocess has active team agents.
+        // Their results arrive as a future autonomous turn. Killing the session now would
+        // abort all in-flight agent tasks.
         const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
         if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getLastTurnThoughts())) {
           // Clear the flag that invalidateAllSessions may have set — we don't want
@@ -502,7 +513,7 @@ export async function getOrCreateV2Session(
           return existing.session
         }
 
-        // No active team agents — safe to rebuild now.
+        // No active processing and no team agents — safe to rebuild now.
         if (needsCredentialRebuild) {
           console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
         } else {
@@ -660,6 +671,9 @@ export async function ensureSessionWarm(
   try {
     const session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, undefined, workDir, resolvedCredentials.displayModel)
 
+    // Ensure consumer's displayModel is up-to-date (same as sendMessage)
+    updateConsumerDisplayModel(conversationId, resolvedCredentials.displayModel)
+
     // Fetch supported commands from SDK and send to renderer
     // This provides slash commands immediately without needing to send a message
     try {
@@ -715,6 +729,18 @@ export function closeAllV2Sessions(): void {
  */
 export function getConsumerHandle(conversationId: string): ConsumerHandle | null {
   return consumers.get(conversationId) || null
+}
+
+/**
+ * Update the display model on an existing consumer.
+ * Called by sendMessage/ensureSessionWarm to keep displayModel in sync after
+ * model switches without requiring a full session rebuild.
+ */
+export function updateConsumerDisplayModel(conversationId: string, displayModel: string): void {
+  const consumer = consumers.get(conversationId)
+  if (consumer) {
+    consumer.updateDisplayModel(displayModel)
+  }
 }
 
 /**
@@ -830,6 +856,43 @@ export function invalidateSessionsForSpace(spaceId: string): void {
 
   if (count > 0) {
     console.log(`[Agent] Invalidated ${count} session(s) in space ${spaceId} due to MCP change`)
+  }
+}
+
+/**
+ * Invalidate all IM channel sessions (but not native Halo chat sessions).
+ * Called when IM channel config is reloaded, so permission changes take effect
+ * on the next inbound message without requiring a manual /halo-clear.
+ *
+ * Uses {@link isImSessionKey} from im-keys.ts (single source of truth for
+ * key format) to distinguish IM sessions from native chat and automation runs.
+ */
+export function invalidateImSessions(): void {
+  let count = 0
+  for (const convId of Array.from(v2Sessions.keys())) {
+    if (!isImSessionKey(convId)) continue
+
+    if (activeSessions.has(convId)) {
+      pendingInvalidations.add(convId)
+      console.log(`[Agent][${convId}] IM config changed, deferring session close until idle`)
+      count++
+      continue
+    }
+
+    const consumer = consumers.get(convId)
+    if (consumer && consumer.isRunning) {
+      pendingConsumerRebuilds.add(convId)
+      console.log(`[Agent][${convId}] IM config changed, marking consumer for rebuild`)
+      count++
+      continue
+    }
+
+    cleanupSession(convId, 'IM config change')
+    count++
+  }
+
+  if (count > 0) {
+    console.log(`[Agent] Invalidated ${count} IM session(s) due to channel config reload`)
   }
 }
 

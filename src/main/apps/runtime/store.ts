@@ -117,6 +117,7 @@ export class ActivityStore {
   private readonly stmtGetLatestRunForApp: Database.Statement
   private readonly stmtGetEntriesForRun: Database.Statement
   private readonly stmtUpdateRunSessionId: Database.Statement
+  private readonly stmtReopenRun: Database.Statement
   private readonly stmtCloseOrphanEscalations: Database.Statement
   private readonly stmtCloseOrphanEscalationsAll: Database.Statement
 
@@ -220,6 +221,14 @@ export class ActivityStore {
     this.stmtUpdateRunSessionId = db.prepare(`
       UPDATE automation_runs SET session_id = ? WHERE run_id = ?
     `)
+
+    // Reset a failed run back to running state for user-initiated continue.
+    // Clears finished_at, duration_ms, and error_message so the run appears live again.
+    this.stmtReopenRun = db.prepare(`
+      UPDATE automation_runs
+      SET status = 'running', finished_at = NULL, duration_ms = NULL, error_message = NULL
+      WHERE run_id = ?
+    `)
   }
 
   // ── Run Operations ────────────────────────────
@@ -295,6 +304,16 @@ export class ActivityStore {
   /** Save V2 session ID on a run (for escalation context recovery) */
   updateRunSessionId(runId: string, sessionId: string): void {
     this.stmtUpdateRunSessionId.run(sessionId, runId)
+  }
+
+  /**
+   * Reopen a failed run for user-initiated continue.
+   *
+   * Transitions status from 'error' back to 'running' and clears
+   * completion fields so the run appears live again in the UI.
+   */
+  reopenRun(runId: string): void {
+    this.stmtReopenRun.run(runId)
   }
 
   // ── Entry Operations ──────────────────────────

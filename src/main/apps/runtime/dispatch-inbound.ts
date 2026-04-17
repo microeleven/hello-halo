@@ -19,13 +19,14 @@
 
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
 import { getAppManager } from '../manager'
-import { sendAppChatMessage, buildImSessionKey } from './app-chat'
+import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-chat'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../services/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
 import { activeSessions } from '../../services/agent/session-manager'
+import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
 
 // ============================================
 // Constants
@@ -42,9 +43,17 @@ const MAX_REPLY_LENGTH = 4000
  */
 const STOP_COMMANDS = new Set(['/halo-stop', '/halo-cancel'])
 
+/** Commands that clear the conversation context and start fresh. */
+const CLEAR_COMMANDS = new Set(['/halo-clear', '/halo-reset'])
+
 /** Check whether a message is a stop command (case-insensitive, trimmed). */
 function isStopCommand(body: string): boolean {
   return STOP_COMMANDS.has(body.trim().toLowerCase())
+}
+
+/** Check whether a message is a clear-context command (case-insensitive, trimmed). */
+function isClearCommand(body: string): boolean {
+  return CLEAR_COMMANDS.has(body.trim().toLowerCase())
 }
 
 /**
@@ -200,10 +209,54 @@ export async function dispatchInboundMessage(
     return
   }
 
-  // For group chats, prefix sender name so the AI knows who is speaking
-  let messageText = msg.chatType === 'group' && msg.fromName
-    ? `[${msg.fromName}] ${msg.body}`
-    : msg.body
+  // ── Clear command: reset conversation context ──
+  if (isClearCommand(msg.body)) {
+    console.log(`${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, session=${conversationId}`)
+    try {
+      await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)
+      clearImPermissionContext(conversationId)
+      await reply.send('Context cleared. Starting a fresh conversation.')
+    } catch (err) {
+      console.error(`${LOG_TAG} Failed to clear context: session=${conversationId}`, err)
+      await reply.send('Failed to clear context. Please try again.').catch(() => {})
+    }
+    return
+  }
+
+  // ── Identity injection ───────────────────────────────
+  // Direct chat: sender identity goes into the system prompt (via senderIdentity).
+  //   User messages stay clean — slash commands / skills reach the SDK unmodified.
+  //   Anti-injection is preserved because system prompt is tamper-proof.
+  // Group chat: per-message <msg-sender> tag (different senders per turn).
+  const senderName = msg.fromName ?? msg.from
+  let messageText: string
+  let senderIdentity: { id: string; name: string } | undefined
+
+  if (msg.chatType === 'direct') {
+    messageText = msg.body
+    if (msg.from) {
+      senderIdentity = { id: msg.from, name: senderName }
+    }
+  } else {
+    // Group: per-message sender tag (AI sees who said what in conversation history)
+    messageText = msg.from
+      ? `<msg-sender id="${msg.from}" name="${senderName}" />\n${msg.body}`
+      : msg.body
+  }
+
+  // Resolve owner status and write permission context to the registry.
+  // app-chat.ts reads this to enforce tool restrictions for guests.
+  // When permissionEnabled is false (default), everyone is treated as owner.
+  const permissionEnabled = instanceCfg?.permissionEnabled ?? false
+  const owners = permissionEnabled ? instanceCfg?.owners : undefined
+  const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
+  const isOwner = !hasOwnerRestriction || owners!.includes(msg.from)
+  setImPermissionContext(conversationId, {
+    senderId: msg.from,
+    senderName,
+    isOwner,
+    guestPolicy: hasOwnerRestriction ? instanceCfg?.guestPolicy : undefined,
+  })
 
   // Inject file attachment context so the AI can access them via the Read tool.
   // Images are passed separately as multimodal input (see `images` below);
@@ -224,7 +277,8 @@ export async function dispatchInboundMessage(
     `chatType=${msg.chatType}, instanceId=${instanceId} → ` +
     `app="${app.spec.name}" (${app.id}), session=${conversationId}, msgLen=${msg.body.length}, ` +
     `attachments=${msg.attachments?.length ?? 0}, images=${msg.images?.length ?? 0}, ` +
-    `fileSend=${imFileSend ? 'yes' : 'no'}`
+    `fileSend=${imFileSend ? 'yes' : 'no'}, ` +
+    `sender=${msg.from}(${senderName}), isOwner=${isOwner}`
   )
 
   // Send an immediate acknowledgment so the user sees the <think> block appear
@@ -241,6 +295,7 @@ export async function dispatchInboundMessage(
       conversationId,
       images: msg.images,
       imFileSend,
+      senderIdentity,
 
       // Forward progress events to streaming handle (if channel supports streaming)
       onProgress: reply.streaming

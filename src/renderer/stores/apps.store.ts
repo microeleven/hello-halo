@@ -61,6 +61,9 @@ interface AppsState {
   // ── Escalation ───────────────────────────
   respondToEscalation: (appId: string, escalationId: string, response: { choice?: string; text?: string }) => Promise<boolean>
 
+  // ── Continue ─────────────────────────────
+  continueApp: (appId: string, runId: string) => Promise<boolean>
+
   // ── Config Updates ────────────────────────
   updateAppConfig: (appId: string, config: Record<string, unknown>) => Promise<boolean>
   updateAppFrequency: (appId: string, subscriptionId: string, frequency: string) => Promise<boolean>
@@ -354,6 +357,21 @@ export const useAppsStore = create<AppsState>((set, get) => ({
       return false
     } catch (err) {
       console.error('[AppsStore] respondToEscalation error:', err)
+      return false
+    }
+  },
+
+  // ── Continue ─────────────────────────────
+
+  continueApp: async (appId, runId) => {
+    try {
+      const res = await api.appContinueRun(appId, runId)
+      if (res.success) {
+        get().loadAppState(appId)
+      }
+      return !!res.success
+    } catch (err) {
+      console.error('[AppsStore] continueApp error:', err)
       return false
     }
   },

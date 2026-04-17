@@ -95,6 +95,10 @@ export interface StreamResult {
   reachedMaxTurns: boolean
   /** Whether at least one event was received in this stream() call */
   firstEventReceived: boolean
+  /** Whether the post-abort drain timed out without receiving a result.
+   *  When true, the REPL pipe is dirty — the session must be closed and rebuilt.
+   *  Consumer uses this to break its loop and trigger session rebuild. */
+  drainTimedOut: boolean
 }
 
 /**
@@ -210,6 +214,14 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // Track if we received a result message (for detecting stream interruption)
   let receivedResult = false
 
+  // Silent drain mode: after abort, continue consuming events without emitting to UI,
+  // until the result message arrives. This ensures the CC subprocess's REPL pipe is
+  // fully drained before the consumer re-enters stream() for the next turn.
+  // Without this, leftover drain events from the interrupted turn would be picked up
+  // by the next turn, causing "responds to previous instruction" bugs.
+  let drainStartTime: number | null = null
+  const DRAIN_TIMEOUT_MS = 5_000  // Safety: force break if result never arrives
+
   // [TEAM-DEBUG] Diagnostic tracking for post-result stream behavior
   let resultReceivedAt: number | null = null  // Timestamp when first result arrived
   let postResultEventCount = 0               // Events received AFTER result
@@ -285,10 +297,39 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       }
     }
 
-    // Handle abort - check this session's controller
+    // Handle abort — enter silent drain mode instead of breaking immediately.
+    // CC subprocess's interrupt() produces a result (error_during_execution) that MUST
+    // be consumed. Breaking here would leave it in the pipe, corrupting the next turn.
     if (abortController.signal.aborted) {
-      console.log(`[Agent][${conversationId}] Aborted`)
-      break
+      if (!drainStartTime) {
+        drainStartTime = Date.now()
+        console.log(`[Agent][${conversationId}] Aborted — entering silent drain mode`)
+      }
+
+      // Safety timeout: if CC never produces a result (crash, bug), force break
+      if (Date.now() - drainStartTime > DRAIN_TIMEOUT_MS) {
+        console.warn(`[Agent][${conversationId}] Drain timeout (${DRAIN_TIMEOUT_MS}ms), force breaking`)
+        break
+      }
+
+      // Consume the result and exit cleanly
+      if (sdkMessage.type === 'result') {
+        receivedResult = true
+        hadErrorDuringExecution = true
+        // Extract session ID for persistence
+        const msg = sdkMessage as Record<string, unknown>
+        if (!capturedSessionId) {
+          const sessionIdFromMsg = msg.session_id || (msg.message as Record<string, unknown>)?.session_id
+          capturedSessionId = sessionIdFromMsg as string
+        }
+        // Extract token usage
+        tokenUsage = extractResultUsage(msg, lastSingleUsage)
+        console.log(`[Agent][${conversationId}] Drain complete — result consumed after ${Date.now() - drainStartTime}ms`)
+        break
+      }
+
+      // Skip all processing (no UI events, no thought accumulation) — just drain
+      continue
     }
 
     // [TEAM-DEBUG] Log every message that arrives AFTER result to understand SDK stream lifecycle
@@ -909,6 +950,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     errorThought,
     reachedMaxTurns: hadMaxTurnsReached,
     firstEventReceived: firstEventFired,
+    drainTimedOut: wasAborted && drainStartTime !== null && !receivedResult,
   }
 
   // Notify caller for storage handling (optional — consumer-based callers

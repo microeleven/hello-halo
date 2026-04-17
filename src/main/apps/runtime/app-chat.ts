@@ -37,6 +37,7 @@ import {
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
 import { createCanUseTool } from '../../services/agent/permission-handler'
+import { getImPermissionContext } from './im-permission-registry'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { processStream } from '../../services/agent/stream-processor'
@@ -69,6 +70,45 @@ import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
 export { getAppChatConversationId, buildImSessionKey }
+
+// ============================================
+// Constants
+// ============================================
+
+/**
+ * Complete list of SDK built-in tools (from SDK init event).
+ *
+ * Used to compute the guest disallowed list: ALL minus guest's whitelist = blacklist.
+ * Must be kept in sync when upgrading the Claude Code SDK — if a new built-in tool
+ * is added and not listed here, guests would have access to it by default.
+ *
+ * NOTE: SDK `tools` option (API-level whitelist) was tested and confirmed non-functional —
+ * the SDK ignores it entirely. `disallowedTools` is the only working mechanism.
+ */
+const ALL_BUILTIN_TOOLS = [
+  'AskUserQuestion',
+  'Bash',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+  'Edit',
+  'EnterPlanMode',
+  'EnterWorktree',
+  'ExitPlanMode',
+  'ExitWorktree',
+  'Glob',
+  'Grep',
+  'NotebookEdit',
+  'Read',
+  'Skill',
+  'Task',
+  'TaskOutput',
+  'TaskStop',
+  'TodoWrite',
+  'WebFetch',
+  'WebSearch',
+  'Write',
+]
 
 // ============================================
 // Types
@@ -115,6 +155,13 @@ export interface AppChatRequest {
    * Absent for text-only channels and for the native Halo chat UI.
    */
   imFileSend?: (filePath: string, filename?: string) => Promise<boolean>
+  /**
+   * Sender identity for direct IM chats.
+   * Injected into the system prompt (tamper-proof) instead of prefixing user messages,
+   * so slash commands / skills reach the SDK cleanly.
+   * Not provided for group chats (which use per-message <msg-sender> tags).
+   */
+  senderIdentity?: { id: string; name: string }
 }
 
 // ============================================
@@ -167,7 +214,7 @@ const scopedContexts = new Map<string, BrowserContext>()
 export async function sendAppChatMessage(
   request: AppChatRequest
 ): Promise<void> {
-  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend } = request
+  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend, senderIdentity } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
@@ -213,6 +260,7 @@ export async function sendAppChatMessage(
     usesAIBrowser,
     workDir,
     modelInfo: resolvedCreds.displayModel,
+    senderIdentity,
   })
 
   // ── 4. Build MCP servers ─────────────────────────────
@@ -297,6 +345,31 @@ export async function sendAppChatMessage(
       conversationId,
       nonInteractive: true,
     })
+  }
+
+  // ── IM guest permission control ────────────────────────────────
+  // For non-owner senders in IM sessions, restrict available tools via SDK options.
+  // Two layers, split by tool prefix:
+  //   1. disallowedTools (built-in) — blacklist computed by inverting the guest's whitelist.
+  //      ALL_BUILTIN_TOOLS minus guest's allowed tools = disallowed. The SDK removes
+  //      these from the model's visible tool pool entirely (API-level removal).
+  //   2. allowedTools (MCP) — permission pre-approval for MCP tools. Non-interactive
+  //      sessions auto-deny any MCP tool not in this list (whitelist semantics).
+  // Owner sessions are unaffected (bypassPermissions, full tool access).
+  const permCtx = getImPermissionContext(conversationId)
+  if (permCtx && !permCtx.isOwner) {
+    const guestAllowed = permCtx.guestPolicy?.allowedTools ?? []
+    // Split into built-in vs MCP
+    const builtinAllowedSet = new Set(guestAllowed.filter(t => !t.startsWith('mcp__')))
+    const mcpAllowed = guestAllowed.filter(t => t.startsWith('mcp__'))
+    // Invert whitelist → blacklist for built-in tools
+    const disallowed = ALL_BUILTIN_TOOLS.filter(t => !builtinAllowedSet.has(t))
+    sdkOptions.disallowedTools = disallowed
+    sdkOptions.allowedTools = mcpAllowed
+    console.log(
+      `[AppChat][${appId}] Guest session: sender=${permCtx.senderId}, ` +
+      `allowed=[${Array.from(builtinAllowedSet)}], disallowed=${disallowed.length} tools, mcpAllowed=[${mcpAllowed}]`
+    )
   }
 
   // ── Resolve space path and run ID early (needed for both session resume and JSONL) ──

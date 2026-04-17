@@ -364,6 +364,24 @@ export function registerAppHandlers(): void {
     }
   )
 
+  // ── app:continue-run ─────────────────────────────────────────────────────
+  ipcMain.handle(
+    'app:continue-run',
+    async (_event, input: { appId: string; runId: string }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        await r.runtime.continueFailedRun(input.appId, input.runId)
+        console.log(`[AppIPC] app:continue-run: appId=${input.appId}, runId=${input.runId}`)
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:continue-run error:', err.message)
+        return { success: false, error: err.message }
+      }
+    }
+  )
+
   // ── app:update-config ────────────────────────────────────────────────────
   ipcMain.handle(
     'app:update-config',
@@ -870,5 +888,5 @@ export function registerAppHandlers(): void {
     }
   )
 
-  console.log('[AppIPC] App management handlers registered (27 channels)')
+  console.log('[AppIPC] App management handlers registered (28 channels)')
 }
