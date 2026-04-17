@@ -246,16 +246,20 @@ export async function dispatchInboundMessage(
 
   // Resolve owner status and write permission context to the registry.
   // app-chat.ts reads this to enforce tool restrictions for guests.
-  // When permissionEnabled is false (default), everyone is treated as owner.
+  //
+  // Three cases:
+  //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
+  //   permissionEnabled=true, owners=[]  → everyone is guest, deny-all (no one has write access)
+  //   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
   const permissionEnabled = instanceCfg?.permissionEnabled ?? false
   const owners = permissionEnabled ? instanceCfg?.owners : undefined
   const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
-  const isOwner = !hasOwnerRestriction || owners!.includes(msg.from)
+  const isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
   setImPermissionContext(conversationId, {
     senderId: msg.from,
     senderName,
     isOwner,
-    guestPolicy: hasOwnerRestriction ? instanceCfg?.guestPolicy : undefined,
+    guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
     ownerNames: hasOwnerRestriction ? owners! : undefined,
   })
 
