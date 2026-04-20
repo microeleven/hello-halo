@@ -8,7 +8,7 @@
  * Performance: ~1-3 seconds per search, zero AI token consumption.
  */
 
-import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
+import { tool, createSdkMcpServer } from '../agent/resolved-sdk'
 import { z } from 'zod'
 import { getSearchContext } from './search-context'
 import type { SearchResponse } from './types'

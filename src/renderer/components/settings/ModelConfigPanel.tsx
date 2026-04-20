@@ -1,0 +1,356 @@
+/**
+ * ModelConfigPanel
+ *
+ * Displays and edits per-model capability overrides stored in AISource.modelOverrides.
+ *
+ * Effective value priority: user override > JSON preset > built-in defaults.
+ *
+ * Visual tab  — form fields showing effective (merged) values.
+ * JSON tab    — raw JSON of effective values; parsed on blur.
+ *
+ * The component loads the preset for the current modelId on mount and whenever
+ * modelId changes. All edits write into overrides[modelId]. "Reset to preset"
+ * deletes overrides[modelId].
+ */
+
+import { useState, useEffect, useRef } from 'react'
+import { ChevronDown, ChevronRight, RotateCcw, Info, AlertTriangle, Loader2 } from 'lucide-react'
+import { useTranslation } from '../../i18n'
+import { api } from '../../api'
+import type { ModelCapability, ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
+
+// ── Default values used when no preset exists ──────────────────────────────
+const DEFAULT_CAPABILITY: ModelCapability = {
+  displayName: '',
+  provider: '',
+  contextWindow: 128_000,
+  maxOutputTokens: 16_384,
+  vision: false,
+  thinking: false
+}
+
+interface ModelConfigPanelProps {
+  /** Currently selected model ID */
+  modelId: string
+  /** All model overrides for this AISource (read-only input) */
+  overrides: Record<string, ModelCapabilityOverride>
+  /** Called whenever overrides should change */
+  onChange: (overrides: Record<string, ModelCapabilityOverride>) => void
+}
+
+type ActiveTab = 'visual' | 'json'
+
+export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPanelProps) {
+  const { t } = useTranslation()
+
+  // ── Collapse state (auto-expand when no preset found) ──────────────────
+  const [isOpen, setIsOpen] = useState(false)
+  const [autoExpandedForModel, setAutoExpandedForModel] = useState<string>('')
+
+  // ── Preset data ────────────────────────────────────────────────────────
+  const [preset, setPreset] = useState<ModelCapability | null>(null)
+  const [loadingPreset, setLoadingPreset] = useState(false)
+
+  // ── Tab state ──────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<ActiveTab>('visual')
+
+  // ── JSON editor state ──────────────────────────────────────────────────
+  const [jsonText, setJsonText] = useState('')
+  const [jsonError, setJsonError] = useState<string | null>(null)
+  const jsonLoadedForModel = useRef<string>('')
+
+  // ── Compute effective values ───────────────────────────────────────────
+  // Priority: override > preset > defaults
+  const userOverride = overrides[modelId] ?? {}
+  const base: ModelCapability = preset ?? DEFAULT_CAPABILITY
+  const effective: ModelCapability = { ...base, ...userOverride }
+  const hasOverride = Object.keys(userOverride).length > 0
+
+  // ── Load preset when modelId changes ──────────────────────────────────
+  useEffect(() => {
+    if (!modelId) return
+
+    let cancelled = false
+    setLoadingPreset(true)
+    setPreset(null)
+    setJsonError(null)
+
+    api.modelCapabilitiesGetPreset(modelId)
+      .then(res => {
+        if (cancelled) return
+        setPreset((res.data as ModelCapability | null) ?? null)
+      })
+      .catch(err => {
+        if (cancelled) return
+        console.warn('[ModelConfigPanel] Failed to load preset:', err)
+        setPreset(null)
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPreset(false)
+      })
+
+    return () => { cancelled = true }
+  }, [modelId])
+
+  // ── Auto-expand when no preset matched (so user sees fallback values) ───
+  useEffect(() => {
+    if (loadingPreset || !modelId) return
+    if (preset === null && autoExpandedForModel !== modelId) {
+      setIsOpen(true)
+      setAutoExpandedForModel(modelId)
+    }
+  }, [loadingPreset, preset, modelId, autoExpandedForModel])
+
+  // ── Sync JSON editor when switching to the JSON tab or when modelId changes ──
+  useEffect(() => {
+    if (activeTab !== 'json') return
+    if (jsonLoadedForModel.current === modelId) return
+
+    const entry = {
+      contextWindow: effective.contextWindow,
+      maxOutputTokens: effective.maxOutputTokens,
+      vision: effective.vision,
+      thinking: effective.thinking
+    }
+    setJsonText(JSON.stringify(entry, null, 2))
+    setJsonError(null)
+    jsonLoadedForModel.current = modelId
+  }, [activeTab, modelId, effective])
+
+  // ── Handle tab switching ───────────────────────────────────────────────
+  const handleTabChange = (tab: ActiveTab) => {
+    setActiveTab(tab)
+  }
+
+  // ── Visual field helpers ───────────────────────────────────────────────
+  const updateField = <K extends keyof ModelCapabilityOverride>(
+    field: K,
+    value: ModelCapabilityOverride[K]
+  ) => {
+    const next: ModelCapabilityOverride = { ...userOverride, [field]: value }
+    onChange({ ...overrides, [modelId]: next })
+    // Reset JSON "loaded" marker so it re-syncs on next tab switch
+    jsonLoadedForModel.current = ''
+  }
+
+  const handleNumberField = (field: 'contextWindow' | 'maxOutputTokens', raw: string) => {
+    const n = parseInt(raw, 10)
+    if (!Number.isFinite(n) || n < 0) return
+    updateField(field, n)
+  }
+
+  const handleBoolField = (field: 'vision' | 'thinking', checked: boolean) => {
+    updateField(field, checked)
+  }
+
+  // ── JSON editor helpers ────────────────────────────────────────────────
+  const handleJsonBlur = () => {
+    try {
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>
+      const next: ModelCapabilityOverride = {}
+      if (typeof parsed.contextWindow === 'number') next.contextWindow = parsed.contextWindow
+      if (typeof parsed.maxOutputTokens === 'number') next.maxOutputTokens = parsed.maxOutputTokens
+      if (typeof parsed.vision === 'boolean') next.vision = parsed.vision
+      if (typeof parsed.thinking === 'boolean') next.thinking = parsed.thinking
+      setJsonError(null)
+      onChange({ ...overrides, [modelId]: next })
+    } catch {
+      setJsonError(t('Invalid JSON — changes not saved'))
+    }
+  }
+
+  // ── Reset override ─────────────────────────────────────────────────────
+  const handleReset = () => {
+    const next = { ...overrides }
+    delete next[modelId]
+    onChange(next)
+    setJsonError(null)
+    jsonLoadedForModel.current = ''
+  }
+
+  // ── Preset info badge ──────────────────────────────────────────────────
+  const renderPresetInfo = () => {
+    if (loadingPreset) {
+      return (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          {t('Loading preset...')}
+        </div>
+      )
+    }
+
+    if (preset) {
+      return (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Info className="w-3 h-3 shrink-0" />
+          <span>
+            {t('Preset')}{': '}
+            <span className="font-medium text-foreground">{preset.displayName || modelId}</span>
+            {preset.provider && (
+              <span> · {preset.provider}</span>
+            )}
+          </span>
+        </div>
+      )
+    }
+
+    return (
+      <div className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+        <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+        <span>{t('No preset found — verify these values match your model')}</span>
+      </div>
+    )
+  }
+
+  // ── Main render ───────────────────────────────────────────────────────
+  return (
+    <div className="border border-border rounded-lg overflow-hidden">
+      {/* Collapse header */}
+      <button
+        onClick={() => setIsOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-secondary/40 hover:bg-secondary/60
+                   transition-colors text-sm font-medium text-foreground"
+      >
+        <span>{t('Model Configuration')}</span>
+        {isOpen
+          ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+          : <ChevronRight className="w-4 h-4 text-muted-foreground" />
+        }
+      </button>
+
+      {/* Collapsible body */}
+      {isOpen && (
+        <div className="p-3 space-y-3 border-t border-border bg-background">
+          {/* Tab bar */}
+          <div className="flex items-center justify-end gap-1">
+            <button
+              onClick={() => handleTabChange('visual')}
+              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors
+                ${activeTab === 'visual'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                }`}
+            >
+              {t('Visual')}
+            </button>
+            <button
+              onClick={() => handleTabChange('json')}
+              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors
+                ${activeTab === 'json'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                }`}
+            >
+              JSON
+            </button>
+          </div>
+
+          {/* ── Visual tab ── */}
+          {activeTab === 'visual' && (
+            <div className="space-y-3">
+              {/* Context Window + Max Output: stacked on mobile, 2-col on sm */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {/* Context Window */}
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    {t('Context Window')}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1024}
+                      value={effective.contextWindow}
+                      onChange={e => handleNumberField('contextWindow', e.target.value)}
+                      className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
+                                 rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
+                  </div>
+                </div>
+
+                {/* Max Output Tokens */}
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    {t('Max Output Tokens')}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      step={256}
+                      value={effective.maxOutputTokens}
+                      onChange={e => handleNumberField('maxOutputTokens', e.target.value)}
+                      className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
+                                 rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Feature toggles: side-by-side */}
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={effective.vision}
+                    onChange={e => handleBoolField('vision', e.target.checked)}
+                    className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+                  />
+                  <span className="text-sm text-foreground">{t('Vision')}</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={effective.thinking}
+                    onChange={e => handleBoolField('thinking', e.target.checked)}
+                    className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+                  />
+                  <span className="text-sm text-foreground">{t('Thinking')}</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* ── JSON tab ── */}
+          {activeTab === 'json' && (
+            <div className="space-y-1.5">
+              <textarea
+                value={jsonText}
+                onChange={e => setJsonText(e.target.value)}
+                onBlur={handleJsonBlur}
+                rows={7}
+                spellCheck={false}
+                className="w-full px-3 py-2 text-xs font-mono bg-input border border-border
+                           rounded-lg text-foreground resize-none
+                           focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+              {jsonError && (
+                <p className="text-xs text-red-500">{jsonError}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t('Edit JSON then click outside to apply. Only numeric and boolean fields are used.')}
+              </p>
+            </div>
+          )}
+
+          {/* Footer: preset info + reset */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-1 border-t border-border">
+            {renderPresetInfo()}
+            {hasOverride && (
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground
+                           transition-colors shrink-0"
+              >
+                <RotateCcw className="w-3 h-3" />
+                {t('Reset to preset')}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

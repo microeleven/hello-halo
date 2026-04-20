@@ -14,6 +14,7 @@
 
 import type { AutomationSpec } from '../spec'
 import type { MemorySnapshot } from '../../platform/memory/snapshot'
+import type { EscalationResponse } from './types'
 import { buildSystemPrompt } from '../../services/agent/system-prompt'
 
 // ============================================
@@ -247,6 +248,30 @@ export function buildInitialMessage(options: {
   )
 
   return parts.join('\n\n')
+}
+
+// ============================================
+// Escalation Resume Message
+// ============================================
+
+/**
+ * Build a minimal user message for an escalation follow-up that resumes
+ * an existing session. Since the full conversation context is restored
+ * from disk, only the user's response is needed — no Trigger/Memory/Config.
+ */
+export function buildEscalationResumeMessage(escalation: {
+  originalQuestion: string
+  userResponse: EscalationResponse
+}): string {
+  const responseText = escalation.userResponse.text
+    || escalation.userResponse.choice
+    || '(no response)'
+  return (
+    `User responded to your escalation.\n\n` +
+    `Your question: "${escalation.originalQuestion}"\n` +
+    `User's response: "${responseText}"\n\n` +
+    `Continue your task based on this response.`
+  )
 }
 
 // ============================================

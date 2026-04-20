@@ -10,21 +10,22 @@
   },
   "authProviders": [
     {
-      "type": "github-copilot",
+      "type": "claude",
       "displayName": {
-        "en": "GitHub Copilot",
-        "zh-CN": "GitHub Copilot"
+        "en": "Claude",
+        "zh-CN": "Claude"
       },
+      "recommended": true,
       "description": {
-        "en": "Use your Copilot subscription",
-        "zh-CN": "使用您的 Copilot 订阅"
+        "en": "Claude Pro/Max, login with claude.ai account",
+        "zh-CN": "Claude Pro/Max, 使用 claude.ai 账号登录"
       },
-      "icon": "github",
-      "iconBgColor": "#24292e",
-      "recommended": false,
+      "icon": "log-in",
+      "iconBgColor": "#D97757",
       "builtin": true,
       "enabled": true
     },
+
     {
       "type": "custom",
       "displayName": {
@@ -37,6 +38,22 @@
       },
       "icon": "key",
       "iconBgColor": "#da7756",
+      "recommended": false,
+      "builtin": true,
+      "enabled": true
+    },
+    {
+      "type": "github-copilot",
+      "displayName": {
+        "en": "GitHub Copilot",
+        "zh-CN": "GitHub Copilot"
+      },
+      "description": {
+        "en": "Login with GitHub, use Copilot models",
+        "zh-CN": "GitHub 登录，使用 Copilot 模型"
+      },
+      "icon": "github",
+      "iconBgColor": "#24292e",
       "recommended": false,
       "builtin": true,
       "enabled": true

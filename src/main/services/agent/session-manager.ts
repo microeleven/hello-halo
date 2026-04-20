@@ -12,7 +12,7 @@ import path from 'path'
 import os from 'os'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
 import { app } from 'electron'
-import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
+import { createSession } from './resolved-sdk'
 import { getConfig, onApiConfigChange, getCredentialsGeneration } from '../config.service'
 import { onMcpAppsChange } from '../../apps/manager/service'
 import { getConversation } from '../conversation.service'
@@ -28,12 +28,14 @@ import {
   getApiCredentials,
   getDbMcpServers
 } from './helpers'
+import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 import { createHaloAppsMcpServer } from '../../apps/conversation-mcp'
 import { createWebSearchMcpServer } from '../web-search'
 import { startConsumer, type ConsumerHandle } from './session-consumer'
+import { hasActiveTeamTasks } from './subagent-handler'
 
 // ============================================
 // Session Maps
@@ -82,10 +84,13 @@ const pendingConsumerRebuilds = new Set<string>()
 function isSessionBusy(conversationId: string): boolean {
   if (activeSessions.has(conversationId)) return true
   const consumer = consumers.get(conversationId)
-  // A running consumer is only "busy" when actively processing a turn
-  // (getActiveSessionState() != null). Between turns it waits in stream() —
-  // that is idle and should be eligible for the 30-min timeout cleanup.
-  return !!(consumer && consumer.getActiveSessionState())
+  if (!consumer?.isRunning) return false
+  // Actively processing a turn — definitely busy.
+  if (consumer.getActiveSessionState()) return true
+  // Consumer is idle between turns (waiting in stream()), but the CC subprocess
+  // may still have team agents running. Their results will arrive as a future turn.
+  // Treat such sessions as busy to prevent the 30-min cleanup from killing them.
+  return hasActiveTeamTasks(consumer.getLastTurnThoughts())
 }
 
 // ============================================
@@ -454,6 +459,13 @@ export async function getOrCreateV2Session(
       console.log(`[Agent][${conversationId}] Session transport not ready (process dead), recreating...`)
       closeV2SessionForRebuild(conversationId)
       // Fall through to create new session
+    } else if (consumers.get(conversationId)?.isRunning === false) {
+      // Consumer exited (e.g., race between session recreation and invalidateAllSessions
+      // during OAuth token refresh). The CC process is alive but nobody is reading its
+      // output — a zombie session. Rebuild to restore a healthy session + consumer.
+      console.log(`[Agent][${conversationId}] Consumer exited, session is zombie — rebuilding`)
+      closeV2SessionForRebuild(conversationId)
+      // Fall through to create new session
     } else {
       // Check if credentials have changed since session was created
       // This catches race conditions where session was created with stale credentials
@@ -463,10 +475,45 @@ export async function getOrCreateV2Session(
       const needsConfigRebuild = config && needsSessionRebuild(existing, config)
 
       if (needsCredentialRebuild || needsConfigRebuild) {
-        // Force rebuild: stop consumer (if any), close old session, create new.
-        // This is safe because getOrCreateV2Session is called from sendMessage
-        // before the new turn starts — the consumer is idle (waiting in stream()),
-        // not actively processing a turn.
+        const consumer = consumers.get(conversationId)
+
+        // Guard 1: Consumer is actively processing a turn (mid-API-call, mid-tool, etc.)
+        // Killing it now would destroy the in-flight response — the user loses the answer.
+        // Instead, mark for deferred rebuild: the consumer checks pendingConsumerRebuilds
+        // after each turn completes (session-consumer.ts consumePendingRebuild) and breaks
+        // its loop, triggering a clean rebuild on the next sendMessage.
+        const isActivelyProcessing = consumer?.isRunning && consumer.getActiveSessionState() !== null
+        if (isActivelyProcessing) {
+          pendingConsumerRebuilds.add(conversationId)
+          const reason = needsCredentialRebuild
+            ? `gen ${existing.credentialsGeneration}→${currentGen}`
+            : 'config changed'
+          console.log(
+            `[Agent][${conversationId}] Session rebuild deferred — consumer is actively processing a turn ` +
+            `(${reason}). Will rebuild after turn completes.`
+          )
+          existing.lastUsedAt = Date.now()
+          return existing.session
+        }
+
+        // Guard 2: Consumer is idle between turns but CC subprocess has active team agents.
+        // Their results arrive as a future autonomous turn. Killing the session now would
+        // abort all in-flight agent tasks.
+        const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
+        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getLastTurnThoughts())) {
+          // Clear the flag that invalidateAllSessions may have set — we don't want
+          // the consumer to break after the next team turn while messages are queued.
+          pendingConsumerRebuilds.delete(conversationId)
+          console.log(
+            `[Agent][${conversationId}] Session rebuild deferred — active team agents detected ` +
+            `(${needsCredentialRebuild ? `gen ${existing.credentialsGeneration}→${currentGen}` : 'config changed'}). ` +
+            `Will rebuild after team tasks complete.`
+          )
+          existing.lastUsedAt = Date.now()
+          return existing.session
+        }
+
+        // No active processing and no team agents — safe to rebuild now.
         if (needsCredentialRebuild) {
           console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
         } else {
@@ -510,25 +557,8 @@ export async function getOrCreateV2Session(
   if (effectiveSessionId) {
     sdkOptions.resume = effectiveSessionId
   }
-  // Requires SDK patch: native SDK ignores most sdkOptions parameters
-  // Use 'as any' to bypass type check, actual params handled by patched SDK
-  const useHaloSdk = getConfig().agent?.sdkEngine === 'halo'
-  let session: V2SDKSession
-  if (useHaloSdk) {
-    // Dynamic import — SDK is only loaded when the user explicitly enables it.
-    // Keeps it out of the main process startup bundle entirely.
-    // @vite-ignore skips bundler resolution so builds succeed without src/sdk.
-    try {
-      const { createSession: haloCreateSession } = await import(/* @vite-ignore */ '@hello-halo/agent-sdk')
-      session = (await haloCreateSession(sdkOptions as any)) as unknown as V2SDKSession
-      console.log(`[Agent][${conversationId}] Using Halo SDK (experimental)`)
-    } catch {
-      console.warn(`[Agent][${conversationId}] Halo SDK not available, falling back to Anthropic SDK`)
-      session = (await unstable_v2_createSession(sdkOptions as any)) as unknown as V2SDKSession
-    }
-  } else {
-    session = (await unstable_v2_createSession(sdkOptions as any)) as unknown as V2SDKSession
-  }
+  // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently
+  const session = (await createSession(sdkOptions)) as unknown as V2SDKSession
 
   // Log PID for health system verification (via SDK patch)
   const pid = (session as any).pid
@@ -641,6 +671,9 @@ export async function ensureSessionWarm(
   try {
     const session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, undefined, workDir, resolvedCredentials.displayModel)
 
+    // Ensure consumer's displayModel is up-to-date (same as sendMessage)
+    updateConsumerDisplayModel(conversationId, resolvedCredentials.displayModel)
+
     // Fetch supported commands from SDK and send to renderer
     // This provides slash commands immediately without needing to send a message
     try {
@@ -696,6 +729,18 @@ export function closeAllV2Sessions(): void {
  */
 export function getConsumerHandle(conversationId: string): ConsumerHandle | null {
   return consumers.get(conversationId) || null
+}
+
+/**
+ * Update the display model on an existing consumer.
+ * Called by sendMessage/ensureSessionWarm to keep displayModel in sync after
+ * model switches without requiring a full session rebuild.
+ */
+export function updateConsumerDisplayModel(conversationId: string, displayModel: string): void {
+  const consumer = consumers.get(conversationId)
+  if (consumer) {
+    consumer.updateDisplayModel(displayModel)
+  }
 }
 
 /**
@@ -811,6 +856,43 @@ export function invalidateSessionsForSpace(spaceId: string): void {
 
   if (count > 0) {
     console.log(`[Agent] Invalidated ${count} session(s) in space ${spaceId} due to MCP change`)
+  }
+}
+
+/**
+ * Invalidate all IM channel sessions (but not native Halo chat sessions).
+ * Called when IM channel config is reloaded, so permission changes take effect
+ * on the next inbound message without requiring a manual /halo-clear.
+ *
+ * Uses {@link isImSessionKey} from im-keys.ts (single source of truth for
+ * key format) to distinguish IM sessions from native chat and automation runs.
+ */
+export function invalidateImSessions(): void {
+  let count = 0
+  for (const convId of Array.from(v2Sessions.keys())) {
+    if (!isImSessionKey(convId)) continue
+
+    if (activeSessions.has(convId)) {
+      pendingInvalidations.add(convId)
+      console.log(`[Agent][${convId}] IM config changed, deferring session close until idle`)
+      count++
+      continue
+    }
+
+    const consumer = consumers.get(convId)
+    if (consumer && consumer.isRunning) {
+      pendingConsumerRebuilds.add(convId)
+      console.log(`[Agent][${convId}] IM config changed, marking consumer for rebuild`)
+      count++
+      continue
+    }
+
+    cleanupSession(convId, 'IM config change')
+    count++
+  }
+
+  if (count > 0) {
+    console.log(`[Agent] Invalidated ${count} IM session(s) due to channel config reload`)
   }
 }
 

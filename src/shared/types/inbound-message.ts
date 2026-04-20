@@ -37,6 +37,32 @@ export interface InboundMessage {
   timestamp: number
   /** Optional recent history provided by the adapter (if the platform API supports it) */
   recentHistory?: InboundHistoryEntry[]
+  /**
+   * Downloaded media attachments from IM channels.
+   *
+   * Channel adapters download and decrypt platform-specific media into local temp
+   * files before constructing this message. The runtime sees only local paths.
+   * Files / video attachments are surfaced to the AI via a text description in
+   * the message body; images are also available as `images` for multimodal input.
+   */
+  attachments?: InboundAttachment[]
+  /**
+   * Image data for multimodal AI input.
+   *
+   * Channel adapters download, decrypt, and base64-encode received images into
+   * this array before dispatch. Structurally identical to ImageAttachment in
+   * src/main/services/agent/types.ts — kept inline here to avoid a shared ↔ main
+   * import dependency.
+   *
+   * Only populated for image-type attachments (not files or video).
+   */
+  images?: Array<{
+    id: string
+    type: 'image'
+    mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+    data: string
+    name?: string
+  }>
 }
 
 /** A single entry in the optional recent history array. */
@@ -44,6 +70,28 @@ export interface InboundHistoryEntry {
   sender: string
   body: string
   timestamp: number
+}
+
+// ============================================
+// InboundAttachment
+// ============================================
+
+/**
+ * A downloaded media attachment from an IM channel.
+ *
+ * Channel adapters download and decrypt platform-specific media into local
+ * temp files. The runtime layer only sees local file paths — no platform
+ * protocol details leak through this type.
+ */
+export interface InboundAttachment {
+  /** Media type */
+  type: 'file' | 'image' | 'video'
+  /** Original filename (from platform metadata) */
+  filename: string
+  /** Absolute path to decrypted local temp file */
+  localPath: string
+  /** MIME type if known (e.g. 'image/jpeg', 'application/pdf') */
+  mimeType?: string
 }
 
 // ============================================
@@ -87,4 +135,47 @@ export interface ReplyHandle {
    *   Webhook:   undefined (HTTP response is immediate, no TTL)
    */
   replyTtlMs?: number
+  /** Optional streaming capability, present only when the channel supports incremental updates. */
+  streaming?: StreamingHandle
+}
+
+// ============================================
+// ProgressEvent
+// ============================================
+
+/**
+ * Platform-agnostic progress event produced by the core runtime.
+ * Channel adapters convert these to platform-specific formats.
+ */
+export type ProgressEvent =
+  | { type: 'thinking'; text: string }
+  | { type: 'tool_call'; tool: string; summary: string }
+  | { type: 'tool_result'; tool: string; summary: string; success: boolean }
+  | { type: 'text_delta'; text: string }
+  | { type: 'status'; text: string }
+
+// ============================================
+// StreamingHandle
+// ============================================
+
+/**
+ * Optional streaming capability on a ReplyHandle.
+ * Present only when the channel supports incremental updates.
+ *
+ * Channel adapters implement this to translate ProgressEvents
+ * into platform-specific streaming formats.
+ */
+export interface StreamingHandle {
+  /**
+   * Send a progress event during execution.
+   * The adapter accumulates these and pushes to the IM platform.
+   * May be called dozens of times per execution (batching is the adapter's job).
+   */
+  update(event: ProgressEvent): Promise<void>
+
+  /**
+   * Finalize the stream with the AI's response.
+   * After this call, no more update() calls should be made.
+   */
+  finish(finalText: string): Promise<void>
 }

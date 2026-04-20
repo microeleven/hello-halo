@@ -17,7 +17,7 @@
  *   tools/index.ts       — aggregation (buildAllTools)
  */
 
-import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
+import { createSdkMcpServer } from '../agent/resolved-sdk'
 import { browserContext, type BrowserContext } from './context'
 import { buildAllTools } from './tools'
 

@@ -8,7 +8,8 @@
 import { ipcMain } from 'electron'
 import { getImChannelManager } from '../apps/runtime'
 import { getConfig } from '../services/config.service'
-import { dispatchInboundMessage } from '../apps/runtime/dispatch-inbound'
+import { dispatchInboundMessage, invalidateImSessions } from '../apps/runtime'
+import { getImChannelsPermissionDefaults } from '../services/ai-sources/auth-loader'
 import type { ImChannelInstanceStatus } from '../../shared/types/im-channel'
 
 export function registerImChannelHandlers(): void {
@@ -71,6 +72,9 @@ export function registerImChannelHandlers(): void {
       manager.applyConfig(instances, (instanceId, appId, msg, reply) => {
         dispatchInboundMessage(msg, reply, appId, instanceId)
       })
+      // Invalidate existing IM sessions so permission/config changes take effect
+      // on the next inbound message without requiring a manual /halo-clear.
+      invalidateImSessions()
       return { success: true }
     } catch (error: unknown) {
       return { success: false, error: (error as Error).message }
@@ -93,6 +97,16 @@ export function registerImChannelHandlers(): void {
         defaultConfig: p.defaultConfig,
       }))
       return { success: true, data: providers }
+    } catch (error: unknown) {
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
+  // Get product-level permission defaults for new instance initialization
+  ipcMain.handle('im-channels:permission-defaults', async () => {
+    try {
+      const defaults = getImChannelsPermissionDefaults()
+      return { success: true, data: defaults ?? null }
     } catch (error: unknown) {
       return { success: false, error: (error as Error).message }
     }

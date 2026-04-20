@@ -21,7 +21,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, AlertCircle } from 'lucide-react'
+import { Loader2, AlertCircle, Play } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { MessageRow } from '../chat/MessageRow'
@@ -50,6 +50,27 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
   // Check if this run is currently active via the app's runtime state
   const runtimeState = useAppsStore(s => s.appStates[appId])
   const isLive = runtimeState?.status === 'running' && runtimeState?.runningRunId === runId
+
+  // Detect premature termination for this run (to show Continue button)
+  const activityEntries = useAppsStore(s => s.activityEntries[appId])
+  const continueApp = useAppsStore(s => s.continueApp)
+  const [isContinuing, setIsContinuing] = useState(false)
+
+  const errorEntry = activityEntries?.find(
+    e => e.runId === runId && e.type === 'run_error' && e.content.error === 'report_to_user not called'
+  )
+  const isPrematureTermination = !!errorEntry
+  const isAppBusy = runtimeState?.status === 'running' || runtimeState?.status === 'queued'
+
+  const handleContinue = async () => {
+    if (isContinuing || isAppBusy) return
+    setIsContinuing(true)
+    try {
+      await continueApp(appId, runId)
+    } finally {
+      setIsContinuing(false)
+    }
+  }
 
   // ── Load session messages (reusable for initial load + polling) ──
   const loadSession = useCallback(async (isPolling = false) => {
@@ -174,6 +195,22 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
           <div className="flex items-center gap-2 py-4 text-muted-foreground/60">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
             <span className="text-xs">{t('Processing...')}</span>
+          </div>
+        )}
+
+        {/* Continue button — shown when run ended with premature AI termination */}
+        {isPrematureTermination && !isLive && (
+          <div className="mt-2 flex">
+            <button
+              onClick={handleContinue}
+              disabled={isContinuing || isAppBusy}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full
+                bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20
+                transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Play className="w-3 h-3" />
+              {isContinuing ? t('Continuing…') : t('Continue')}
+            </button>
           </div>
         )}
       </div>

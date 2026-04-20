@@ -16,6 +16,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
+import type { ModelCapabilityOverride } from './model-capabilities'
 
 // ============================================================================
 // Localization Utilities
@@ -116,6 +117,16 @@ export interface ModelOption {
  */
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
+    id: 'claude-mythos-preview',
+    name: 'Claude Mythos (Preview)',
+    description: 'Next-generation frontier model, preview access'
+  },
+  {
+    id: 'claude-opus-4-7',
+    name: 'Claude Opus 4.7',
+    description: 'Latest and most powerful model, great for complex reasoning and architecture decisions'
+  },
+  {
     id: 'claude-opus-4-6',
     name: 'Claude Opus 4.6',
     description: 'Most powerful model, great for complex reasoning and architecture decisions'
@@ -203,6 +214,17 @@ export interface AISource {
   createdAt: string
   /** Last update timestamp (ISO 8601) */
   updatedAt: string
+
+  // ===== Model Capability Overrides (Optional) =====
+  /**
+   * Per-model capability overrides for this source.
+   * Keys are model IDs; values are partial capability overrides.
+   * Takes precedence over the preset data in model-capabilities.json.
+   *
+   * Example: override context window for a local Ollama model:
+   *   { "llama3": { "contextWindow": 8192 } }
+   */
+  modelOverrides?: Record<string, ModelCapabilityOverride>
 }
 
 /**

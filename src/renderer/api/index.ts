@@ -31,6 +31,7 @@ import type {
   HealthExportResponse,
   HealthCheckResponse
 } from '../../shared/types'
+import { getAppChatConversationId } from '../../shared/apps/im-keys'
 
 // Response type
 interface ApiResponse<T = unknown> {
@@ -964,6 +965,42 @@ export const api = {
     return httpRequest('GET', '/api/im-channels/providers')
   },
 
+  imChannelsPermissionDefaults: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsPermissionDefaults()
+    }
+    return httpRequest('GET', '/api/im-channels/permission-defaults')
+  },
+
+  // ===== WeChat Personal Bot via iLink API =====
+  weixinIlinkRequestQrcode: async (): Promise<ApiResponse<{ qrcode: string; qrcodeImgContent: string; baseUrl: string }>> => {
+    if (isElectron()) {
+      return window.halo.weixinIlinkRequestQrcode()
+    }
+    return httpRequest('POST', '/api/weixin-ilink/request-qrcode')
+  },
+
+  weixinIlinkPollAuthStatus: async (qrcode: string): Promise<ApiResponse<{ status: 'wait' | 'scaned' | 'confirmed' | 'expired'; botToken?: string; accountId?: string; baseUrl?: string; userId?: string }>> => {
+    if (isElectron()) {
+      return window.halo.weixinIlinkPollAuthStatus(qrcode)
+    }
+    return httpRequest('POST', '/api/weixin-ilink/poll-auth-status', { qrcode })
+  },
+
+  weixinIlinkSaveToken: async (instanceId: string, botToken: string, baseUrl?: string, accountId?: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.weixinIlinkSaveToken(instanceId, botToken, baseUrl, accountId)
+    }
+    return httpRequest('POST', '/api/weixin-ilink/save-token', { instanceId, botToken, baseUrl, accountId })
+  },
+
+  weixinIlinkDisconnect: async (instanceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.weixinIlinkDisconnect(instanceId)
+    }
+    return httpRequest('POST', '/api/weixin-ilink/disconnect', { instanceId })
+  },
+
   // ===== IM Sessions (会话管理) =====
   imSessionsList: async (appId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -1613,6 +1650,13 @@ export const api = {
     return httpRequest('POST', `/api/apps/${appId}/escalation/${escalationId}/respond`, response as Record<string, unknown>)
   },
 
+  appContinueRun: async (appId: string, runId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appContinueRun({ appId, runId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/continue`)
+  },
+
   appUpdateConfig: async (appId: string, config: Record<string, unknown>): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appUpdateConfig({ appId, config })
@@ -1716,6 +1760,14 @@ export const api = {
 
   // App Chat
   appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean }): Promise<ApiResponse> => {
+    // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
+    // The view also subscribes on mount (via useRemoteSubscription), but the API-level
+    // subscription mirrors sendMessage's pattern and ensures coverage if the API is
+    // called before the view mounts (e.g. programmatic triggers).
+    if (!isElectron()) {
+      subscribeToConversation(getAppChatConversationId(request.appId))
+    }
+
     if (isElectron()) {
       return window.halo.appChatSend(request)
     }
@@ -1884,6 +1936,43 @@ export const api = {
       return window.halo.onStoreSyncStatusChanged(callback)
     }
     return onEvent('store:sync-status-changed', callback)
+  },
+
+  // ===== Model Capabilities =====
+
+  /**
+   * Resolve the effective capability for a model.
+   * Merges preset data with the supplied user overrides.
+   */
+  modelCapabilitiesResolve: async (
+    modelId: string,
+    overrides?: Record<string, Record<string, unknown>>
+  ): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.modelCapabilitiesResolve(modelId, overrides)
+    }
+    return httpRequest('POST', '/api/model-capabilities/resolve', { modelId, overrides })
+  },
+
+  /**
+   * Get the raw preset for a model (no user overrides applied).
+   * Returns null data when no preset exists.
+   */
+  modelCapabilitiesGetPreset: async (modelId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.modelCapabilitiesGetPreset(modelId)
+    }
+    return httpRequest('GET', `/api/model-capabilities/preset/${encodeURIComponent(modelId)}`)
+  },
+
+  /**
+   * Get all preset model capability entries as a flat map.
+   */
+  modelCapabilitiesAll: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.modelCapabilitiesAll()
+    }
+    return httpRequest('GET', '/api/model-capabilities/all')
   },
 }
 

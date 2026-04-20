@@ -5,7 +5,7 @@
  * caching, broadcasting, and connection testing.
  */
 
-import { query as claudeQuery } from '@anthropic-ai/claude-agent-sdk'
+import { query as claudeQuery } from './resolved-sdk'
 import { getConfig, getTempSpacePath } from '../config.service'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { McpServerStatusInfo } from './types'

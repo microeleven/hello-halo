@@ -12,8 +12,9 @@
  * - Stream processing: collect final result only
  */
 
+import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
+import { createSession } from '../../services/agent/resolved-sdk'
 import type { InstalledApp } from '../manager'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryService, MemoryCallerScope } from '../../platform/memory'
@@ -26,7 +27,7 @@ import type {
   ActivityEntry,
 } from './types'
 import { RunExecutionError } from './errors'
-import { buildAppSystemPrompt, buildInitialMessage } from './prompt'
+import { buildAppSystemPrompt, buildInitialMessage, buildEscalationResumeMessage } from './prompt'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer } from './report-tool'
 import type { ReportToolContext } from './report-tool'
@@ -36,7 +37,8 @@ import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/ag
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createWebSearchMcpServer } from '../../services/web-search'
-import { getConfig } from '../../services/config.service'
+import { createEmailMcpServer } from '../../services/email-mcp'
+import { getConfig, resolveClaudeConfigDir } from '../../services/config.service'
 import { getSpace } from '../../services/space.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
 
@@ -58,6 +60,17 @@ export interface ExecuteRunOptions {
   abortSignal?: AbortSignal
   /** Insert an activity entry and broadcast it to renderer + remote clients */
   emitEntry?: (entry: ActivityEntry) => void
+  /**
+   * Existing run ID to reopen (user-initiated continue).
+   *
+   * When provided, `executeRun` skips `store.insertRun()` and reuses this run
+   * record instead of creating a new one. Used by `continueFailedRun` so the
+   * Activity Thread entry updates in-place (error → running → completed) rather
+   * than spawning a second timeline entry.
+   */
+  existingRunId?: string
+  /** Existing session key matching the run record (required when existingRunId is set). */
+  existingSessionKey?: string
 }
 
 /** Internal result from stream processing */
@@ -84,26 +97,32 @@ const MAX_TURNS = 100
 /**
  * Max auto-continue attempts when AI ends without calling report_to_user.
  *
- * When the LLM returns end_turn without having called report_to_user (our
- * definitive completion signal), the runtime automatically sends a follow-up
- * message prompting the AI to continue — mimicking a human typing "continue"
- * in an interactive session.
+ * LLM premature termination is almost always a backend issue (context pressure,
+ * transient API behaviour), not a failure to understand the task. A higher limit
+ * gives the model more chances to recover without human intervention.
  */
-const MAX_AUTO_CONTINUES = 3
+const MAX_AUTO_CONTINUES = 10
 
-/** Message sent to AI when auto-continuing (non-final attempt) */
+/**
+ * Message appended to every automatic retry.
+ *
+ * Prepended with "Continue. " on each auto-retry cycle so the full message reads:
+ *   "Continue. You ended your response without calling report_to_user. ..."
+ *
+ * User-initiated continues send only "Continue." (no suffix) to keep the signal
+ * clean and avoid over-constraining the model.
+ */
 const AUTO_CONTINUE_MESSAGE =
   'You ended your response without calling report_to_user. ' +
   'Every execution MUST end with a report_to_user call. ' +
   'If your task is complete, call report_to_user now with a summary of what you did. ' +
   'If your task is not complete, continue working and call report_to_user when finished.'
 
-/** Message sent on the final auto-continue attempt */
-const AUTO_CONTINUE_FINAL_MESSAGE =
-  'FINAL REMINDER: You must call report_to_user NOW. ' +
-  'This is your last chance to report results. Summarize whatever you have accomplished ' +
-  'and call mcp__halo-report__report_to_user immediately. ' +
-  'If you do not call it, this run will be marked as failed.'
+/** Full auto-retry prompt: short directive + reminder */
+const AUTO_CONTINUE_FULL = `Continue. ${AUTO_CONTINUE_MESSAGE}`
+
+/** User-initiated continue: minimal prompt to avoid over-constraining the model */
+const USER_CONTINUE_MESSAGE = 'Continue.'
 
 /** Session key prefix for automation runs */
 const SESSION_KEY_PREFIX = 'app-run'
@@ -130,7 +149,7 @@ const SESSION_KEY_PREFIX = 'app-run'
  * @throws RunExecutionError on unrecoverable failure
  */
 export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResult> {
-  const { app, trigger, store, memory, abortSignal, emitEntry } = options
+  const { app, trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey } = options
 
   // Guard: executeRun is only valid for automation apps.
   // This narrows app.spec to AutomationSpec for the rest of the function.
@@ -138,26 +157,34 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     throw new RunExecutionError('unknown', 'unknown', `executeRun called for non-automation app type: ${app.spec.type}`)
   }
 
-  const runId = randomUUID()
-  const sessionKey = `${SESSION_KEY_PREFIX}-${runId.slice(0, 8)}`
+  // For continue_followup and escalation_followup (with existingRunId), reuse the
+  // existing run record. For all other triggers, generate a new run ID and insert fresh.
+  const isResuming = trigger.type === 'continue_followup' ||
+    (trigger.type === 'escalation_followup' && !!existingRunId)
+  const runId = existingRunId ?? randomUUID()
+  const sessionKey = existingSessionKey ?? `${SESSION_KEY_PREFIX}-${runId.slice(0, 8)}`
   const startedAt = Date.now()
 
   const runTag = runId.slice(0, 8)
   console.log(
     `[Runtime][${runTag}] ▶ Starting run: app=${app.id}, trigger=${trigger.type}, ` +
-    `appName="${app.spec.name}", spaceId=${app.spaceId}`
+    `appName="${app.spec.name}", spaceId=${app.spaceId}` +
+    (isResuming ? ` (resuming existing run)` : '')
   )
 
-  // Record run start
-  store.insertRun({
-    runId,
-    appId: app.id,
-    sessionKey,
-    status: 'running',
-    triggerType: trigger.type,
-    triggerData: trigger.eventPayload ?? (trigger.escalation ? { escalation: trigger.escalation } : undefined),
-    startedAt,
-  })
+  // Record run start — skip for resuming runs since the run was already
+  // reopened (error/waiting_user → running) by the caller before calling executeRun.
+  if (!isResuming) {
+    store.insertRun({
+      runId,
+      appId: app.id,
+      sessionKey,
+      status: 'running',
+      triggerType: trigger.type,
+      triggerData: trigger.eventPayload ?? (trigger.escalation ? { escalation: trigger.escalation } : undefined),
+      startedAt,
+    })
+  }
 
   // Track escalation from report_to_user callback
   let escalationEntryId: string | undefined
@@ -198,6 +225,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 2. Build system prompt ─────────────────────────────
     const memoryInstructions = memory.getPromptInstructions()
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
+    const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -242,12 +270,19 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     await preInsertHistoryHeading(memorySnapshot.memoryFilePath, runTimestamp, memorySnapshot.rawContent)
     console.log(`[Runtime][${runTag}] Pre-inserted History heading: ## ${runTimestamp}`)
 
-    const initialMessage = buildInitialMessage({
-      triggerContext: trigger.description,
-      userConfig: mergedConfig,
-      appName: app.spec.name,
-      memorySnapshot,
-    })
+    // Resuming runs (continue or escalation follow-up) send minimal messages
+    // so the model can resume naturally from its restored session context.
+    // A full trigger message would interfere with the in-progress task state.
+    const initialMessage = trigger.type === 'continue_followup'
+      ? USER_CONTINUE_MESSAGE
+      : (trigger.type === 'escalation_followup' && existingRunId && trigger.escalation)
+        ? buildEscalationResumeMessage(trigger.escalation)
+        : buildInitialMessage({
+            triggerContext: trigger.description,
+            userConfig: mergedConfig,
+            appName: app.spec.name,
+            memorySnapshot,
+          })
 
     console.log(
       `[Runtime][${runTag}] ── INITIAL MESSAGE ────────────────────────\n` +
@@ -267,6 +302,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    The AI uses native Read/Edit/Write on memory.md directly.
     const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
 
+    // Resolve plans directory for file-based data_path guidance in report_to_user.
+    // Uses the same CC config directory that the SDK session uses for consistency.
+    const configDir = resolveClaudeConfigDir(config.agent?.configDirMode)
+    const plansDir = join(configDir, 'plans')
+
     const reportContext: ReportToolContext = {
       appId: app.id,
       appName: app.spec.name,
@@ -274,6 +314,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       sessionKey,
       notificationLevel: app.userOverrides.notificationLevel,
       notifyChannels: app.spec.output?.notify?.channels,
+      plansDir,
     }
 
     const reportMcpServer = createReportToolServer(
@@ -330,6 +371,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'web-search': createWebSearchMcpServer(), // built-in: web search
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
+        ...(usesEmail && config.notificationChannels?.email?.enabled
+          ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
+          : {}),
       },
     })
 
@@ -345,25 +389,41 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     console.log(
       `[Runtime][${runTag}] Creating V2 session: workDir=${workDir}, ` +
       `promptLen=${systemPrompt.length}, maxTurns=${MAX_TURNS}, ` +
-      `mcpServers=[${mcpServerNames.join(', ')}], aiBrowser=${usesAIBrowser}`
+      `mcpServers=[${mcpServerNames.join(', ')}], aiBrowser=${usesAIBrowser}, email=${usesEmail}`
     )
 
-    // Escalation followup: restore previous session via getOrCreateV2Session
-    // to recover full conversation context (reasoning, tool calls, intermediate results).
-    // Normal runs: create a fresh session directly.
-    const resumeSessionId = trigger.escalation?.sessionId
-    if (trigger.type === 'escalation_followup' && resumeSessionId) {
-      console.log(`[Runtime][${runTag}] Restoring session for escalation followup: ${resumeSessionId}`)
+    // Session creation strategy:
+    //   escalation_followup / continue_followup → restore existing session via
+    //     getOrCreateV2Session to recover full conversation context.
+    //   All other triggers → create a fresh session.
+    const escalationResumeId = trigger.escalation?.sessionId
+    const continueResumeId = trigger.continue?.sessionId
+
+    if (trigger.type === 'escalation_followup' && escalationResumeId) {
+      console.log(`[Runtime][${runTag}] Restoring session for escalation followup: ${escalationResumeId}`)
       session = await getOrCreateV2Session(
         app.spaceId!,
         sessionKey,
         sdkOptions,
-        resumeSessionId,
+        escalationResumeId,
+        undefined,
+        workDir
+      )
+    } else if (trigger.type === 'continue_followup' && continueResumeId) {
+      console.log(`[Runtime][${runTag}] Restoring session for user-initiated continue: ${continueResumeId}`)
+      session = await getOrCreateV2Session(
+        app.spaceId!,
+        sessionKey,
+        sdkOptions,
+        continueResumeId,
         undefined,
         workDir
       )
     } else {
-      session = await unstable_v2_createSession(sdkOptions as any)
+      if (trigger.type === 'continue_followup') {
+        console.warn(`[Runtime][${runTag}] continue_followup has no sessionId — starting fresh session`)
+      }
+      session = await createSession(sdkOptions)
     }
     console.log(`[Runtime][${runTag}] V2 session created, sending initial message`)
 
@@ -386,9 +446,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // ── 6b. Auto-continue if AI ended without calling report_to_user ──
     //    report_to_user is the definitive completion signal for automation runs.
-    //    If the LLM returns without calling it (model quirks, context issues,
-    //    or bugs), we automatically prompt it to continue — mimicking a human
-    //    typing "continue" in an interactive session.
+    //    LLM premature termination is almost always a transient backend issue, not a
+    //    task failure. We retry up to MAX_AUTO_CONTINUES times with a single unified
+    //    message ("Continue. <reminder>") — no graduated messaging needed.
     let autoContinueCount = 0
     while (
       !streamResult.reportToolCalled &&
@@ -397,10 +457,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       autoContinueCount < MAX_AUTO_CONTINUES
     ) {
       autoContinueCount++
-      const isLastAttempt = autoContinueCount >= MAX_AUTO_CONTINUES
-      const continueMessage = isLastAttempt
-        ? AUTO_CONTINUE_FINAL_MESSAGE
-        : AUTO_CONTINUE_MESSAGE
 
       console.log(
         `[Runtime][${runTag}] ⟳ Auto-continue #${autoContinueCount}/${MAX_AUTO_CONTINUES}: ` +
@@ -409,12 +465,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
       // Log the continue prompt to the session file for "View process" drill-down
       if (sessionWriter) {
-        sessionWriter.writeTrigger(`[Auto-continue #${autoContinueCount}] ${continueMessage}`)
+        sessionWriter.writeTrigger(`[Auto-continue #${autoContinueCount}] ${AUTO_CONTINUE_FULL}`)
       }
 
       const nextResult = await processStream(
         session,
-        continueMessage,
+        AUTO_CONTINUE_FULL,
         abortController,
         runTag,
         sessionWriter
@@ -475,12 +531,20 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       tokensUsed: streamResult.totalTokens || undefined,
     })
 
-    // Save session ID for escalation context recovery.
-    // When the user responds, the follow-up run will use this sessionId
-    // to restore the full conversation context via getOrCreateV2Session.
-    if (finalStatus === 'waiting_user' && streamResult.sessionId) {
+    // Save session ID for context recovery on both escalation and premature-stop errors.
+    //
+    // escalation (waiting_user): user responds → follow-up run restores context.
+    // premature termination (error + !reportToolCalled): user clicks Continue →
+    //   continueFailedRun() reopens this run and restores the same session.
+    if (streamResult.sessionId && (
+      finalStatus === 'waiting_user' ||
+      (finalStatus === 'error' && !streamResult.reportToolCalled)
+    )) {
       store.updateRunSessionId(runId, streamResult.sessionId)
-      console.log(`[Runtime][${runTag}] Session ID saved for escalation recovery: ${streamResult.sessionId}`)
+      console.log(
+        `[Runtime][${runTag}] Session ID saved for context recovery ` +
+        `(${finalStatus}): ${streamResult.sessionId}`
+      )
     }
 
     // Insert an error activity entry when AI never called report_to_user,

@@ -17,7 +17,7 @@
  */
 
 import { z } from 'zod'
-import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
+import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import { sendToChannel, getEnabledChannels } from '../../services/notify-channels'
 import { getConfig } from '../../services/config.service'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'

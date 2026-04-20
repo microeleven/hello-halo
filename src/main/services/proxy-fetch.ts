@@ -31,6 +31,7 @@ import http from 'node:http'
 import zlib from 'node:zlib'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from './config.service'
+import { isHttpLoggingEnabled, logHttpRequest } from './http-logger'
 
 // ============================================================================
 // Preserve originals before any global patching
@@ -367,6 +368,17 @@ export async function proxyFetch(
   }
 
   const method = (init?.method || 'GET').toUpperCase()
+
+  // Developer HTTP logging — no-op when disabled (isHttpLoggingEnabled is O(1))
+  if (isHttpLoggingEnabled()) {
+    logHttpRequest({
+      method,
+      url: urlStr,
+      headers: headersToRecord(init?.headers),
+      body: typeof init?.body === 'string' ? init.body : undefined,
+    })
+  }
+
   if (!proxyUrl) {
     console.log(`[ProxyFetch] DIRECT ${method} ${urlStr}`)
     return _originalFetch(url, init)

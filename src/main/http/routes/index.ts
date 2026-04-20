@@ -30,7 +30,7 @@ import {
   renameArtifact,
   moveArtifact
 } from '../../services/artifact.service'
-import { getTempSpacePath, getSpacesDir, getConfig as getServiceConfig } from '../../services/config.service'
+import { getTempSpacePath, getSpacesDir, getConfig as getServiceConfig, saveConfig } from '../../services/config.service'
 import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getAppManager } from '../../apps/manager'
 import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, isAppChatGenerating, loadAppChatMessages, loadImChatMessages, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, dispatchInboundMessage } from '../../apps/runtime'
@@ -42,6 +42,10 @@ import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
 import type { AppErrorCode } from '../../controllers/app.controller'
 import * as storeController from '../../controllers/store.controller'
+import { modelCapabilitiesService } from '../../services/model-capabilities.service'
+import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
+import { fetchJson, ILINK_BASE_URL } from '../../apps/runtime/im-channels/ilink-api'
+import { saveIlinkToken, disconnectIlink } from '../../controllers/weixin-ilink.controller'
 
 // Helper: get working directory for a space
 function getWorkingDir(spaceId: string): string {
@@ -871,6 +875,114 @@ export function registerApiRoutes(app: Express): void {
     }
   })
 
+  // GET /api/im-channels/permission-defaults — product-level permission defaults
+  app.get('/api/im-channels/permission-defaults', async (req: Request, res: Response) => {
+    try {
+      const { getImChannelsPermissionDefaults } = await import('../../services/ai-sources/auth-loader')
+      const defaults = getImChannelsPermissionDefaults()
+      res.json({ success: true, data: defaults ?? null })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== WeChat iLink QR Auth Routes =====
+
+  // POST /api/weixin-ilink/request-qrcode
+  app.post('/api/weixin-ilink/request-qrcode', async (_req: Request, res: Response) => {
+    try {
+      // GET requests do NOT use auth headers (per iLink protocol)
+      interface QrCodeResponse { qrcode?: string; qrcode_img_content?: string }
+      const data = await fetchJson<QrCodeResponse>(
+        'GET',
+        `${ILINK_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`,
+        {}
+      )
+      if (!data.qrcode) {
+        res.json({ success: false, error: 'iLink API returned no qrcode token' })
+        return
+      }
+      res.json({
+        success: true,
+        data: {
+          qrcode: data.qrcode,
+          qrcodeImgContent: data.qrcode_img_content ?? '',
+          baseUrl: ILINK_BASE_URL,
+        },
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/weixin-ilink/poll-auth-status
+  app.post('/api/weixin-ilink/poll-auth-status', async (req: Request, res: Response) => {
+    try {
+      const { qrcode } = req.body as { qrcode?: string }
+      if (!qrcode) {
+        res.status(400).json({ success: false, error: 'qrcode is required' })
+        return
+      }
+      // get_qrcode_status requires iLink-App-ClientVersion: 1 header (per protocol)
+      interface QrStatusResponse {
+        status?: 'wait' | 'scaned' | 'confirmed' | 'expired'
+        bot_token?: string
+        ilink_bot_id?: string
+        baseurl?: string
+        ilink_user_id?: string
+      }
+      const data = await fetchJson<QrStatusResponse>(
+        'GET',
+        `${ILINK_BASE_URL}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`,
+        { 'iLink-App-ClientVersion': '1' }
+      )
+      res.json({
+        success: true,
+        data: {
+          status: data.status ?? 'wait',
+          botToken: data.bot_token,
+          accountId: data.ilink_bot_id,
+          baseUrl: data.baseurl,
+          userId: data.ilink_user_id,
+        },
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/weixin-ilink/save-token
+  app.post('/api/weixin-ilink/save-token', async (req: Request, res: Response) => {
+    try {
+      const { instanceId, botToken, baseUrl, accountId } = req.body as {
+        instanceId?: string; botToken?: string; baseUrl?: string; accountId?: string
+      }
+      const result = await saveIlinkToken(instanceId ?? '', botToken ?? '', baseUrl, accountId)
+      if (!result.success) {
+        res.status(400).json(result)
+        return
+      }
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/weixin-ilink/disconnect
+  app.post('/api/weixin-ilink/disconnect', async (req: Request, res: Response) => {
+    try {
+      const { instanceId } = req.body as { instanceId?: string }
+      const result = await disconnectIlink(instanceId ?? '')
+      if (!result.success) {
+        res.status(400).json(result)
+        return
+      }
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // ===== IM Sessions Routes =====
 
   // GET /api/im-sessions — list IM sessions, optional ?appId= filter
@@ -1333,6 +1445,24 @@ export function registerApiRoutes(app: Express): void {
       }
       await runtime.respondToEscalation(appId, entryId, response)
       console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/runs/:runId/continue — user-initiated continue for premature-stop errors
+  app.post('/api/apps/:appId/runs/:runId/continue', async (req: Request, res: Response) => {
+    try {
+      const { appId, runId } = req.params
+      if (!appId || !runId) {
+        res.status(400).json({ success: false, error: 'Missing appId or runId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      await runtime.continueFailedRun(appId, runId)
+      console.log('[HTTP] POST /api/apps/%s/runs/%s/continue', appId, runId)
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -1908,6 +2038,53 @@ export function registerApiRoutes(app: Express): void {
       }
       const result = storeController.updateStoreRegistryAdapterConfig(req.params.registryId, adapterConfig)
       res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== Model Capabilities Routes =====
+
+  // POST /api/model-capabilities/resolve — resolve final capability (preset + user overrides)
+  app.post('/api/model-capabilities/resolve', (req: Request, res: Response) => {
+    try {
+      const { modelId, overrides } = req.body as {
+        modelId?: string
+        overrides?: Record<string, Record<string, unknown>>
+      }
+      if (!modelId || typeof modelId !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing required field: modelId' })
+        return
+      }
+      res.json({
+        success: true,
+        data: modelCapabilitiesService.resolve(modelId, overrides as Record<string, ModelCapabilityOverride> | undefined)
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/model-capabilities/preset/:modelId — get raw preset for a model
+  app.get('/api/model-capabilities/preset/:modelId', (req: Request, res: Response) => {
+    try {
+      const modelId = decodeURIComponent(req.params.modelId)
+      res.json({
+        success: true,
+        data: modelCapabilitiesService.getPreset(modelId)
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/model-capabilities/all — get all presets
+  app.get('/api/model-capabilities/all', (_req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        data: modelCapabilitiesService.getAllPresets()
+      })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

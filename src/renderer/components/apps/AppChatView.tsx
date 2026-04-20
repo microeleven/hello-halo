@@ -26,6 +26,7 @@ import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
 import { CompactNotice } from '../chat/CompactNotice'
 import { InputArea } from '../chat/InputArea'
+import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useTranslation } from '../../i18n'
 import type { Message, ImageAttachment } from '../../types'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
@@ -42,6 +43,9 @@ type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 export function AppChatView({ appId, spaceId }: AppChatViewProps) {
   const { t } = useTranslation()
   const conversationId = getAppChatConversationId(appId)
+
+  // ── Subscribe to agent events (remote/Capacitor clients use WebSocket) ──
+  useRemoteSubscription(conversationId)
 
   // ── Persisted messages ──
   const [messages, setMessages] = useState<Message[]>([])

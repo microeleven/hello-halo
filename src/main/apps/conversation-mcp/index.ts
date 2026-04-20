@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod'
-import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
+import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import { getAppManager } from '../manager'
 import { getAppRuntime } from '../runtime'
 import { ConcurrencyLimitError } from '../runtime/errors'

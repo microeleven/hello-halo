@@ -183,6 +183,14 @@ export class ImChannelManager {
   }
 
   /**
+   * Get the full persisted config for a specific instance.
+   * Used by dispatch-inbound to check streaming/replyScope settings.
+   */
+  getInstanceConfig(instanceId: string): ImChannelInstanceConfig | undefined {
+    return this.currentConfigs.find(c => c.id === instanceId)
+  }
+
+  /**
    * Get status of all configured instances.
    */
   getAllStatuses(): ImChannelInstanceStatus[] {
@@ -260,6 +268,10 @@ export class ImChannelManager {
   /**
    * Compare two instance configs for equality.
    * Deep-compares the provider-specific config object.
+   *
+   * Note: streaming/replyScope are intentionally excluded — they are read at
+   * dispatch time from currentConfigs (updated unconditionally in applyConfig)
+   * and do NOT require a WebSocket reconnect when changed.
    */
   private configEqual(a: ImChannelInstanceConfig, b: ImChannelInstanceConfig): boolean {
     return (

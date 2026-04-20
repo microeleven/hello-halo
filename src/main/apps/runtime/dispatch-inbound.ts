@@ -17,14 +17,16 @@
  * - No direct dependency on any specific adapter
  */
 
-import type { InboundMessage, ReplyHandle } from '../../../shared/types/inbound-message'
+import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
 import { getAppManager } from '../manager'
-import { sendAppChatMessage, buildImSessionKey } from './app-chat'
+import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-chat'
 import { getImSessionRegistry } from './im-session-registry'
+import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../services/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
 import { activeSessions } from '../../services/agent/session-manager'
+import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
 
 // ============================================
 // Constants
@@ -41,9 +43,60 @@ const MAX_REPLY_LENGTH = 4000
  */
 const STOP_COMMANDS = new Set(['/halo-stop', '/halo-cancel'])
 
+/** Commands that clear the conversation context and start fresh. */
+const CLEAR_COMMANDS = new Set(['/halo-clear', '/halo-reset'])
+
 /** Check whether a message is a stop command (case-insensitive, trimmed). */
 function isStopCommand(body: string): boolean {
   return STOP_COMMANDS.has(body.trim().toLowerCase())
+}
+
+/** Check whether a message is a clear-context command (case-insensitive, trimmed). */
+function isClearCommand(body: string): boolean {
+  return CLEAR_COMMANDS.has(body.trim().toLowerCase())
+}
+
+/**
+ * Bilingual rejection message sent when a DM is blocked by replyScope policy.
+ * Hardcoded because the backend does not have renderer i18n loaded.
+ */
+const DM_REJECTED_MESSAGE =
+  '⚠️ This bot only responds in group chats. Please contact the bot administrator for access.\n' +
+  '⚠️ 该机器人仅在群聊中响应，请联系管理员开通权限。'
+
+/** Bilingual rejection for group messages blocked by 'direct'-only scope. */
+const GROUP_REJECTED_MESSAGE =
+  '⚠️ This bot only responds to direct messages.\n' +
+  '⚠️ 该机器人仅在私聊中响应。'
+
+// ============================================
+// Helpers
+// ============================================
+
+/**
+ * Look up the fileCapability for a channel instance and return a pre-bound
+ * send function for the given conversation.
+ *
+ * Returns undefined when:
+ *   - The ImChannelManager is not initialized
+ *   - The instance does not expose fileCapability (text-only channel)
+ *   - The instance is no longer registered
+ *
+ * @param instanceId - IM channel instance ID
+ * @param chatId - Target conversation ID (bound into the closure)
+ * @param chatType - Conversation type (bound into the closure)
+ */
+function resolveImFileSend(
+  instanceId: string,
+  chatId: string,
+  chatType: 'direct' | 'group'
+): ((filePath: string, filename?: string) => Promise<boolean>) | undefined {
+  const manager = getActiveImChannelManager()
+  if (!manager) return undefined
+  const instance = manager.getInstance(instanceId)
+  if (!instance?.fileCapability) return undefined
+  return (filePath: string, filename?: string) =>
+    instance.fileCapability!.sendFile(chatId, filePath, chatType, filename)
 }
 
 // ============================================
@@ -85,6 +138,30 @@ export async function dispatchInboundMessage(
   if (!app.spaceId) {
     console.warn(`${LOG_TAG} App "${app.spec.name}" (${app.id}) has no spaceId — cannot dispatch`)
     return
+  }
+
+  // ── Reply scope check (security gate) ─────────────────────────
+  // Default: 'all' for backward compatibility (existing instances without the
+  // field should not break). New instances default to 'group' in the UI.
+  const channelManager = getActiveImChannelManager()
+  const instanceCfg = channelManager?.getInstanceConfig(instanceId)
+  const replyScope = instanceCfg?.replyScope ?? 'all'
+
+  if (replyScope !== 'all' && replyScope !== msg.chatType) {
+    const rejectionMsg = msg.chatType === 'direct' ? DM_REJECTED_MESSAGE : GROUP_REJECTED_MESSAGE
+    console.log(
+      `${LOG_TAG} Blocked by replyScope: scope=${replyScope}, chatType=${msg.chatType}, ` +
+      `channel=${msg.channel}, chatId=${msg.chatId}, instanceId=${instanceId}`
+    )
+    reply.send(rejectionMsg).catch(() => {})
+    return
+  }
+
+  // ── Streaming disable check ───────────────────────────────────
+  // When streaming is disabled, strip the streaming handle so the runtime
+  // sends only the final reply — no thinking process or tool calls leak.
+  if (instanceCfg?.streaming === false && reply.streaming) {
+    reply = { ...reply, streaming: undefined }
   }
 
   // Build isolated session key
@@ -132,16 +209,88 @@ export async function dispatchInboundMessage(
     return
   }
 
-  // For group chats, prefix sender name so the AI knows who is speaking
-  const messageText = msg.chatType === 'group' && msg.fromName
-    ? `[${msg.fromName}] ${msg.body}`
-    : msg.body
+  // ── Clear command: reset conversation context ──
+  if (isClearCommand(msg.body)) {
+    console.log(`${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, session=${conversationId}`)
+    try {
+      await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)
+      clearImPermissionContext(conversationId)
+      await reply.send('Context cleared. Starting a fresh conversation.')
+    } catch (err) {
+      console.error(`${LOG_TAG} Failed to clear context: session=${conversationId}`, err)
+      await reply.send('Failed to clear context. Please try again.').catch(() => {})
+    }
+    return
+  }
+
+  // ── Identity injection ───────────────────────────────
+  // Direct chat: sender identity goes into the system prompt (via senderIdentity).
+  //   User messages stay clean — slash commands / skills reach the SDK unmodified.
+  //   Anti-injection is preserved because system prompt is tamper-proof.
+  // Group chat: per-message <msg-sender> tag (different senders per turn).
+  const senderName = msg.fromName ?? msg.from
+  let messageText: string
+  let senderIdentity: { id: string; name: string } | undefined
+
+  if (msg.chatType === 'direct') {
+    messageText = msg.body
+    if (msg.from) {
+      senderIdentity = { id: msg.from, name: senderName }
+    }
+  } else {
+    // Group: per-message sender tag (AI sees who said what in conversation history)
+    messageText = msg.from
+      ? `<msg-sender id="${msg.from}" name="${senderName}" />\n${msg.body}`
+      : msg.body
+  }
+
+  // Resolve owner status and write permission context to the registry.
+  // app-chat.ts reads this to enforce tool restrictions for guests.
+  //
+  // Three cases:
+  //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
+  //   permissionEnabled=true, owners=[]  → everyone is guest, deny-all (no one has write access)
+  //   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
+  const permissionEnabled = instanceCfg?.permissionEnabled ?? false
+  const owners = permissionEnabled ? instanceCfg?.owners : undefined
+  const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
+  const isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
+  setImPermissionContext(conversationId, {
+    senderId: msg.from,
+    senderName,
+    isOwner,
+    guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
+    ownerNames: hasOwnerRestriction ? owners! : undefined,
+  })
+
+  // Inject file attachment context so the AI can access them via the Read tool.
+  // Images are passed separately as multimodal input (see `images` below);
+  // files and videos are described here so the AI knows to use Read/Bash.
+  if (msg.attachments && msg.attachments.length > 0) {
+    const fileLines = msg.attachments
+      .map(a => `- [${a.type}] ${a.filename}: ${a.localPath}`)
+      .join('\n')
+    messageText += `\n\n[Attached files — use the Read tool to access their content]\n${fileLines}`
+  }
+
+  // Resolve file-send capability for this instance (absent for text-only channels)
+  const chatTypeNorm: 'direct' | 'group' = msg.chatType
+  const imFileSend = resolveImFileSend(instanceId, msg.chatId, chatTypeNorm)
 
   console.log(
     `${LOG_TAG} Routing: channel=${msg.channel}, chatId=${msg.chatId}, ` +
     `chatType=${msg.chatType}, instanceId=${instanceId} → ` +
-    `app="${app.spec.name}" (${app.id}), session=${conversationId}, msgLen=${msg.body.length}`
+    `app="${app.spec.name}" (${app.id}), session=${conversationId}, msgLen=${msg.body.length}, ` +
+    `attachments=${msg.attachments?.length ?? 0}, images=${msg.images?.length ?? 0}, ` +
+    `fileSend=${imFileSend ? 'yes' : 'no'}, ` +
+    `sender=${msg.from}(${senderName}), isOwner=${isOwner}`
   )
+
+  // Send an immediate acknowledgment so the user sees the <think> block appear
+  // right away instead of staring at silence while session + MCP servers init.
+  if (reply.streaming) {
+    reply.streaming.update({ type: 'status', text: 'Received, processing...' }).catch(() => {})
+  }
 
   try {
     await sendAppChatMessage({
@@ -149,10 +298,33 @@ export async function dispatchInboundMessage(
       spaceId: app.spaceId,
       message: messageText,
       conversationId,
+      images: msg.images,
+      imFileSend,
+      senderIdentity,
+
+      // Forward progress events to streaming handle (if channel supports streaming)
+      onProgress: reply.streaming
+        ? (event: ProgressEvent) => {
+            reply.streaming!.update(event).catch((err: Error) => {
+              console.error(
+                `${LOG_TAG} streaming.update failed: channel=${reply.channel}, chatId=${reply.chatId}`,
+                err
+              )
+            })
+          }
+        : undefined,
+
+      // Use streaming.finish when available, else fall back to one-shot send
       onReply: (finalContent: string) => {
         const replyText = finalContent.slice(0, MAX_REPLY_LENGTH)
-        reply.send(replyText).catch((err) => {
-          console.error(`${LOG_TAG} Failed to send reply: channel=${reply.channel}, chatId=${reply.chatId}`, err)
+        const sendFn = reply.streaming
+          ? () => reply.streaming!.finish(replyText)
+          : () => reply.send(replyText)
+        sendFn().catch((err: Error) => {
+          console.error(
+            `${LOG_TAG} Reply failed: channel=${reply.channel}, chatId=${reply.chatId}`,
+            err
+          )
         })
       },
     })
@@ -161,10 +333,17 @@ export async function dispatchInboundMessage(
       `${LOG_TAG} Execution failed: app=${app.id}, channel=${msg.channel}, chatId=${msg.chatId}`,
       err
     )
-    // Attempt to send error notification back to the IM channel
+    // Attempt to send error notification back to the IM channel.
+    // If streaming was started, we MUST finish the stream rather than sending a
+    // separate one-shot reply — otherwise WeCom receives an unterminated stream
+    // plus a duplicate message, garbling the user's chat.
     try {
       const errorMsg = `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
-      await reply.send(errorMsg)
+      if (reply.streaming) {
+        await reply.streaming.finish(errorMsg)
+      } else {
+        await reply.send(errorMsg)
+      }
     } catch {
       // Reply channel may be unavailable — nothing more we can do
     }

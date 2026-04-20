@@ -13,7 +13,7 @@
  */
 
 import { proxyFetch } from './proxy-fetch'
-import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
+import { createSession } from './agent/resolved-sdk'
 import { app } from 'electron'
 import path from 'path'
 import { ensureOpenAICompatRouter, encodeBackendConfig, normalizeApiUrl } from '../openai-compat-router'
@@ -205,7 +205,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
     }
 
     console.log('[API Validator] Creating SDK session for validation...')
-    const session = await unstable_v2_createSession(sdkOptions as any) as any
+    const session = await createSession(sdkOptions) as any
 
     // Step 6: Send test message using correct SDK pattern: send() + stream()
     console.log('[API Validator] Sending test message...')

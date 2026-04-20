@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 import { z } from 'zod'
-import { tool } from '@anthropic-ai/claude-agent-sdk'
+import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { textResult, withTimeout } from './helpers'
 

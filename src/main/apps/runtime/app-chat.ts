@@ -37,6 +37,8 @@ import {
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
 import { createCanUseTool } from '../../services/agent/permission-handler'
+import { getImPermissionContext } from './im-permission-registry'
+import type { GuestPolicy } from '../../../shared/types/im-channel'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { processStream } from '../../services/agent/stream-processor'
@@ -51,11 +53,13 @@ import {
 } from '../../services/agent/session-manager'
 import { stopGeneration } from '../../services/agent/control'
 import { buildAppChatSystemPrompt } from './prompt-chat'
+import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 import { createNotifyToolServer } from './notify-tool'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
+import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId } from './session-store'
 import { getAppMemoryService, getActivityStore } from './index'
@@ -63,7 +67,118 @@ import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
 import { getAppChatConversationId, buildImSessionKey } from '../../../shared/apps/im-keys'
+import type { ProgressEvent } from '../../../shared/types/inbound-message'
+import type { ImageAttachment } from '../../services/agent/types'
+import { ProgressEventParser } from './progress-formatter'
 export { getAppChatConversationId, buildImSessionKey }
+
+// ============================================
+// Constants
+// ============================================
+
+/**
+ * Complete list of SDK built-in tools (from SDK init event).
+ *
+ * Used to compute the guest disallowed list: ALL minus guest's whitelist = blacklist.
+ * Must be kept in sync when upgrading the Claude Code SDK — if a new built-in tool
+ * is added and not listed here, guests would have access to it by default.
+ *
+ * NOTE: SDK `tools` option (API-level whitelist) was tested and confirmed non-functional —
+ * the SDK ignores it entirely. `disallowedTools` is the only working mechanism.
+ */
+const ALL_BUILTIN_TOOLS = [
+  'AskUserQuestion',
+  'Bash',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+  'Edit',
+  'EnterPlanMode',
+  'EnterWorktree',
+  'ExitPlanMode',
+  'ExitWorktree',
+  'Glob',
+  'Grep',
+  'NotebookEdit',
+  'Read',
+  'Skill',
+  'Task',
+  'TaskOutput',
+  'TaskStop',
+  'TodoWrite',
+  'WebFetch',
+  'WebSearch',
+  'Write',
+]
+
+/**
+ * Halo MCP servers that are always safe for guests (read-only, no side effects).
+ * These are injected into guest sessions regardless of GuestPolicy.
+ */
+const GUEST_SAFE_MCP = new Set(['web-search', 'halo-report', 'halo-memory'])
+
+/**
+ * Halo MCP servers controlled by GuestPolicy toggle switches.
+ * Maps MCP server name → GuestPolicy boolean field name.
+ * If the toggle is not set (undefined/false), the MCP is not injected for guests.
+ */
+const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
+  'ai-browser':   'allowAiBrowser',
+  'halo-email':   'allowEmail',
+  'halo-notify':  'allowNotify',
+  'halo-apps':    'allowApps',
+  'im-file-send': 'allowFileSend',
+}
+
+/**
+ * Build a filtered MCP servers map for guest sessions.
+ *
+ * Three-tier filtering:
+ *   1. User-installed MCPs (from db) → only if listed in allowedUserMcp whitelist
+ *   2. Halo safe MCPs → always injected (web-search, halo-report, halo-memory)
+ *   3. Halo toggleable MCPs → injected only if corresponding GuestPolicy flag is true
+ *   4. Unknown MCPs (future additions) → NOT injected (conservative strategy)
+ *
+ * @param allMcpServers - Complete MCP servers map (already built for owner session)
+ * @param dbMcpServers - User-installed MCP servers from database (null if none)
+ * @param policy - Guest policy from channel instance config
+ */
+function buildGuestMcpServers(
+  allMcpServers: Record<string, any>,
+  dbMcpServers: Record<string, unknown> | null,
+  policy?: GuestPolicy
+): Record<string, any> {
+  const result: Record<string, any> = {}
+
+  for (const [name, server] of Object.entries(allMcpServers)) {
+    // User-installed MCP → whitelist control
+    if (dbMcpServers && name in dbMcpServers) {
+      if (policy?.allowedUserMcp?.includes(name)) {
+        result[name] = server
+      }
+      continue
+    }
+
+    // Halo safe MCP → always inject
+    if (GUEST_SAFE_MCP.has(name)) {
+      result[name] = server
+      continue
+    }
+
+    // Halo toggleable MCP → check policy switch
+    const toggleKey = GUEST_TOGGLEABLE_MCP[name]
+    if (toggleKey) {
+      if (policy?.[toggleKey]) {
+        result[name] = server
+      }
+      continue
+    }
+
+    // Unknown MCP (future additions) → NOT injected (conservative)
+  }
+
+  return result
+}
 
 // ============================================
 // Types
@@ -77,10 +192,17 @@ export interface AppChatRequest {
   spaceId: string
   /** User's message text */
   message: string
-  /** Optional image attachments (same format as main chat) */
-  images?: Array<{ type: string; media_type: string; data: string }>
+  /** Optional image attachments for multimodal input */
+  images?: ImageAttachment[]
   /** Enable extended thinking mode */
   thinkingEnabled?: boolean
+  /**
+   * Optional callback invoked with each progress event during AI execution.
+   * Used by IM channel adapters for real-time streaming progress to the IM channel.
+   * Called for tool_call, tool_result, thinking, text_delta, and status events.
+   * Errors in this callback are caught and logged — they must not interrupt execution.
+   */
+  onProgress?: (event: ProgressEvent) => void
   /**
    * Optional callback invoked with the AI's final response text.
    * Used by external bridges (e.g., WeCom Bot) to auto-reply
@@ -94,6 +216,22 @@ export interface AppChatRequest {
    *   "app-chat:{appId}:{channel}:{chatType}:{chatId}"
    */
   conversationId?: string
+  /**
+   * Optional file-send function for IM channels that support outbound file delivery.
+   *
+   * When present, a `send_file_to_chat` MCP tool is injected into the agent session,
+   * allowing the AI to send local files (reports, exports, images) back to the user.
+   * The function is pre-bound to the current chatId and chatType by dispatch-inbound.ts.
+   * Absent for text-only channels and for the native Halo chat UI.
+   */
+  imFileSend?: (filePath: string, filename?: string) => Promise<boolean>
+  /**
+   * Sender identity for direct IM chats.
+   * Injected into the system prompt (tamper-proof) instead of prefixing user messages,
+   * so slash commands / skills reach the SDK cleanly.
+   * Not provided for group chats (which use per-message <msg-sender> tags).
+   */
+  senderIdentity?: { id: string; name: string }
 }
 
 // ============================================
@@ -146,7 +284,7 @@ const scopedContexts = new Map<string, BrowserContext>()
 export async function sendAppChatMessage(
   request: AppChatRequest
 ): Promise<void> {
-  const { appId, spaceId, message, images, thinkingEnabled, onReply } = request
+  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend, senderIdentity } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
@@ -180,9 +318,14 @@ export async function sendAppChatMessage(
   // ── 3. Build system prompt for interactive chat ──────
   const memoryInstructions = memory.getPromptInstructions()
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
+  const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
 
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
+
+  // Read IM permission context early — needed for both system prompt (ownerNames)
+  // and SDK options (guest tool restrictions). null for native Halo chat.
+  const permCtx = getImPermissionContext(conversationId)
 
   const systemPrompt = buildAppChatSystemPrompt({
     appSpec: app.spec,
@@ -191,6 +334,8 @@ export async function sendAppChatMessage(
     usesAIBrowser,
     workDir,
     modelInfo: resolvedCreds.displayModel,
+    senderIdentity,
+    ownerNames: permCtx?.ownerNames,
   })
 
   // ── 4. Build MCP servers ─────────────────────────────
@@ -236,8 +381,16 @@ export async function sendAppChatMessage(
     'halo-apps': createHaloAppsMcpServer(spaceId),
     'web-search': createWebSearchMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
+    ...(usesEmail && config.notificationChannels?.email?.enabled
+      ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
+      : {}),
+    // Inject file-send tool when the originating IM channel supports file delivery
+    ...(imFileSend ? { 'im-file-send': createFileSendMcpServer(imFileSend) } : {}),
   }
-  console.log(`[AppChat][${appId}] MCP servers: [${Object.keys(mcpServers).join(', ')}], aiBrowser=${usesAIBrowser}`)
+  console.log(
+    `[AppChat][${appId}] MCP servers: [${Object.keys(mcpServers).join(', ')}], ` +
+    `aiBrowser=${usesAIBrowser}, email=${usesEmail}, fileSend=${imFileSend ? 'yes' : 'no'}`
+  )
 
   // ── 5. Build SDK options ─────────────────────────────
   const abortController = new AbortController()
@@ -267,6 +420,37 @@ export async function sendAppChatMessage(
       conversationId,
       nonInteractive: true,
     })
+  }
+
+  // ── IM guest permission control ────────────────────────────────
+  // For non-owner senders in IM sessions, restrict available tools via SDK options.
+  // Two layers:
+  //   1. disallowedTools (built-in) — blacklist computed by inverting the guest's whitelist.
+  //      ALL_BUILTIN_TOOLS minus guest's allowed tools = disallowed. The SDK removes
+  //      these from the model's visible tool pool entirely (API-level removal).
+  //   2. MCP injection control — filter which MCP servers are injected for guests.
+  //      Not injected = model can't see the tool at all. Replaces old allowedTools MCP approach.
+  // Owner sessions are unaffected (bypassPermissions, full tool access).
+  // permCtx was read earlier (before system prompt build) for ownerNames injection.
+  if (permCtx && !permCtx.isOwner) {
+    const guestAllowed = permCtx.guestPolicy?.allowedTools ?? []
+    // Split: built-in tools only (mcp__ entries are legacy, ignored here)
+    const builtinAllowedSet = new Set(guestAllowed.filter(t => !t.startsWith('mcp__')))
+    // Invert whitelist → blacklist for built-in tools
+    const disallowed = ALL_BUILTIN_TOOLS.filter(t => !builtinAllowedSet.has(t))
+    sdkOptions.disallowedTools = disallowed
+    sdkOptions.allowedTools = []
+    if (sdkOptions.extraArgs) {
+      delete sdkOptions.extraArgs['dangerously-skip-permissions']
+    }
+    sdkOptions.permissionMode = 'default'
+    // MCP injection control: only inject servers the guest is allowed to see
+    sdkOptions.mcpServers = buildGuestMcpServers(mcpServers, dbMcpServers, permCtx.guestPolicy)
+    console.log(
+      `[AppChat][${appId}] Guest session: sender=${permCtx.senderId}, ` +
+      `allowed=[${Array.from(builtinAllowedSet)}], disallowed=${disallowed.length} tools, ` +
+      `mcpServers=[${Object.keys(sdkOptions.mcpServers).join(', ')}]`
+    )
   }
 
   // ── Resolve space path and run ID early (needed for both session resume and JSONL) ──
@@ -327,6 +511,10 @@ export async function sendAppChatMessage(
     // See: stream-processor.ts TODO about lastTextContent pollution.
     let lastAssistantText = ''
 
+    // One stateful parser per message: accumulates tool input JSON and thinking
+    // text across delta events, emits complete ProgressEvents on block_stop.
+    const progressParser = onProgress ? new ProgressEventParser() : null
+
     await processStream({
       v2Session,
       sessionState,
@@ -383,6 +571,18 @@ export async function sendAppChatMessage(
                 .map((b: any) => b.text)
                 .join('')
               if (text) lastAssistantText = text
+            }
+          }
+
+          // Emit progress events to IM channel if callback provided
+          if (onProgress && progressParser) {
+            const progressEvent = progressParser.feed(sdkMessage)
+            if (progressEvent) {
+              try {
+                onProgress(progressEvent)
+              } catch (progressErr) {
+                console.error(`[AppChat][${appId}] onProgress callback error:`, progressErr)
+              }
             }
           }
         }

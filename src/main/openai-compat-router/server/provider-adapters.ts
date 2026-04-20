@@ -131,7 +131,7 @@ const deepSeekAdapter: ProviderAdapter = {
  * - reasoningEffort: 'low' | 'medium' | 'high'  (camelCase alias)
  * - reasoning_summary: 'auto'
  *
- * Matched via adapterId from provider plugins (tencent, webank, etc.).
+ * Matched via adapterId from provider plugins.
  */
 const tencentAdapter: ProviderAdapter = {
   id: 'tencent',

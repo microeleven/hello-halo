@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod'
-import { tool } from '@anthropic-ai/claude-agent-sdk'
+import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { browserViewManager } from '../../browser-view.service'
 import { type DeviceMode } from '../../browser-view.service'

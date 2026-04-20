@@ -98,6 +98,54 @@ export interface RegistryOverride {
 }
 
 /**
+ * Enterprise service defaults — pre-populated configuration for internal services.
+ *
+ * Each key maps to a service's config type with optional fields.
+ * At runtime, these defaults are merged under user config (user values take precedence).
+ * Open-source builds omit this entirely; enterprise builds set values in product.json.
+ */
+export interface ServiceDefaults {
+  /** Default email channel configuration (partial — user config wins) */
+  email?: Partial<import('../../../shared/types/notification-channels').EmailChannelConfig>
+}
+
+// ============================================
+// IM Channels product defaults
+// ============================================
+
+/**
+ * Default permission control settings for new IM channel instances.
+ *
+ * Injected via product.json at build time. Only affects the INITIAL state
+ * when a user creates a new IM channel instance — users can override per-instance.
+ *
+ * Enterprise builds typically set `defaultEnabled: true` with a restrictive guest policy.
+ * Open-source/personal builds omit this entirely (defaults to no restrictions).
+ */
+export interface ImChannelsPermissionDefaults {
+  /** Whether Permission Control toggle is ON by default for new instances */
+  defaultEnabled?: boolean
+  /** Whether Guest Access toggle is ON by default (within permission control) */
+  defaultGuestAccess?: boolean
+  /** Default guest policy pre-populated for new instances */
+  defaultGuestPolicy?: {
+    allowedTools?: string[]
+  }
+}
+
+/**
+ * IM Channels section of product.json.
+ */
+export interface ImChannelsProductConfig {
+  /** Default permission settings for new IM channel instances */
+  permissionControl?: ImChannelsPermissionDefaults
+}
+
+// ============================================
+// Product Configuration
+// ============================================
+
+/**
  * Product configuration from product.json
  */
 export interface ProductConfig {
@@ -114,6 +162,12 @@ export interface ProductConfig {
   updateConfig?: UpdateConfig
   /** Browser network access policy (optional, unrestricted when omitted) */
   browserPolicy?: BrowserPolicy
+  /**
+   * Enterprise service defaults (optional).
+   * Pre-populates service configurations so internal users don't need manual setup.
+   * Open-source builds omit this field entirely.
+   */
+  serviceDefaults?: ServiceDefaults
   /**
    * Built-in registry overrides (optional, enterprise/custom builds only).
    *
@@ -133,6 +187,13 @@ export interface ProductConfig {
    * ```
    */
   registryOverrides?: Record<string, RegistryOverride>
+  /**
+   * IM channel defaults (optional, enterprise/custom builds only).
+   *
+   * Controls default permission settings for new IM channel instances.
+   * Open-source builds omit this (no restrictions by default).
+   */
+  imChannels?: ImChannelsProductConfig
 }
 
 /**
@@ -210,6 +271,22 @@ export const DEFAULT_DATA_FOLDER_NAME = 'halo'
  */
 export function getDataFolderName(): string {
   return loadProductConfig().dataFolderName || DEFAULT_DATA_FOLDER_NAME
+}
+
+/**
+ * Get enterprise service defaults from product.json.
+ * Returns undefined when no defaults are configured (open-source builds).
+ */
+export function getServiceDefaults(): ServiceDefaults | undefined {
+  return loadProductConfig().serviceDefaults
+}
+
+/**
+ * Get IM channel permission defaults from product.json.
+ * Returns undefined when no defaults are configured (open-source/personal builds).
+ */
+export function getImChannelsPermissionDefaults(): ImChannelsPermissionDefaults | undefined {
+  return loadProductConfig().imChannels?.permissionControl
 }
 
 /**

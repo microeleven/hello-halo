@@ -117,6 +117,7 @@ export class ActivityStore {
   private readonly stmtGetLatestRunForApp: Database.Statement
   private readonly stmtGetEntriesForRun: Database.Statement
   private readonly stmtUpdateRunSessionId: Database.Statement
+  private readonly stmtReopenRun: Database.Statement
   private readonly stmtCloseOrphanEscalations: Database.Statement
   private readonly stmtCloseOrphanEscalationsAll: Database.Statement
 
@@ -220,6 +221,16 @@ export class ActivityStore {
     this.stmtUpdateRunSessionId = db.prepare(`
       UPDATE automation_runs SET session_id = ? WHERE run_id = ?
     `)
+
+    // Reset a failed or waiting run back to running state.
+    // Used by both user-initiated continue and escalation follow-up.
+    // Clears finished_at, duration_ms, and error_message so the run appears live again.
+    // Only transitions from 'error' or 'waiting_user' to prevent accidental resets.
+    this.stmtReopenRun = db.prepare(`
+      UPDATE automation_runs
+      SET status = 'running', finished_at = NULL, duration_ms = NULL, error_message = NULL
+      WHERE run_id = ? AND status IN ('error', 'waiting_user')
+    `)
   }
 
   // ── Run Operations ────────────────────────────
@@ -295,6 +306,17 @@ export class ActivityStore {
   /** Save V2 session ID on a run (for escalation context recovery) */
   updateRunSessionId(runId: string, sessionId: string): void {
     this.stmtUpdateRunSessionId.run(sessionId, runId)
+  }
+
+  /**
+   * Reopen a failed or waiting run back to running state.
+   *
+   * Used by user-initiated continue (error → running) and
+   * escalation follow-up (waiting_user → running). Only transitions
+   * from 'error' or 'waiting_user'; other statuses are no-ops.
+   */
+  reopenRun(runId: string): void {
+    this.stmtReopenRun.run(runId)
   }
 
   // ── Entry Operations ──────────────────────────

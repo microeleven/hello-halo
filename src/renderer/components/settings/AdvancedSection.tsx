@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Terminal } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { HaloConfig } from '../../types'
@@ -23,6 +23,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     config?.agent?.promptProfile ?? 'halo'
   )
   const [enableTeams, setEnableTeamsState] = useState(config?.agent?.enableTeams ?? false)
+  const [logHttpRequests, setLogHttpRequestsState] = useState(config?.agent?.logHttpRequests ?? false)
 
   const handleMaxTurnsChange = async (value: number) => {
     const clamped = Math.max(10, Math.min(9999, value))
@@ -67,6 +68,21 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     } catch (error) {
       console.error('[AdvancedSection] Failed to update enableTeams:', error)
       setEnableTeamsState(config?.agent?.enableTeams ?? false)
+    }
+  }
+
+  const handleLogHttpRequestsChange = async (enabled: boolean) => {
+    setLogHttpRequestsState(enabled)
+    try {
+      const updatedConfig = {
+        ...config,
+        agent: { ...config?.agent, logHttpRequests: enabled }
+      } as HaloConfig
+      await api.setConfig({ agent: updatedConfig.agent })
+      setConfig(updatedConfig)
+    } catch (error) {
+      console.error('[AdvancedSection] Failed to update logHttpRequests:', error)
+      setLogHttpRequestsState(config?.agent?.logHttpRequests ?? false)
     }
   }
 
@@ -185,6 +201,40 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
             }}
             className="w-24 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
+        </div>
+
+        {/* HTTP Request Logging */}
+        <div className="flex items-start justify-between pt-4 border-t border-border">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Terminal className="w-4 h-4 text-muted-foreground shrink-0" />
+              <p className="font-medium">{t('HTTP Request Logging')}</p>
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shrink-0">
+                {t('Dev')}
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {t('Log all raw outbound HTTP requests (including headers and body) to')}{' '}
+              <code className="text-xs font-mono bg-muted px-1 py-0.5 rounded">http-raw.log</code>
+              {'. '}
+              {t('Useful for inspecting exact LLM API payloads. Disable when not needed.')}
+            </p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4 mt-0.5">
+            <input
+              type="checkbox"
+              checked={logHttpRequests}
+              onChange={(e) => handleLogHttpRequestsChange(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+              <div
+                className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                  logHttpRequests ? 'translate-x-5' : 'translate-x-0.5'
+                } mt-0.5`}
+              />
+            </div>
+          </label>
         </div>
 
         {/* Claude CLI Integration */}

@@ -24,13 +24,16 @@ import {
   CheckCircle2,
   AlertCircle,
   AlertTriangle,
+  ChevronDown,
 } from 'lucide-react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
+import { CreateSpaceForm } from '../space/CreateSpaceForm'
 import type { AppSpec, SkillSpec } from '../../../shared/apps/spec-types'
 import { AppModelSelector } from './AppModelSelector'
+import { SystemPromptEditor } from './SystemPromptEditor'
 import {
   parseDigitalHumanZip,
   parseDigitalHumanFolder,
@@ -334,15 +337,10 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const { installApp, importApp, loadApps, updateAppOverrides } = useAppsStore()
 
   const currentSpace = useSpaceStore(state => state.currentSpace)
-  const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
 
-  const allSpaces = useMemo(() => {
-    const result: Array<{ id: string; name: string; icon: string }> = []
-    if (haloSpace) result.push(haloSpace)
-    result.push(...spaces)
-    return result
-  }, [haloSpace, spaces])
+  // Exclude halo-temp: digital humans must be installed in a dedicated space
+  const dedicatedSpaces = useMemo(() => spaces, [spaces])
 
   const [mode, setMode] = useState<InstallMode>('visual')
   const [form, setForm] = useState<VisualFormState>({ ...INITIAL_FORM })
@@ -353,15 +351,19 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const [modelSourceId, setModelSourceId] = useState<string | undefined>(undefined)
   const [modelId, setModelId] = useState<string | undefined>(undefined)
 
+  const [selectedSpaceId, setSelectedSpaceId] = useState(
+    // Skip halo-temp as default; fall back to first dedicated space
+    (currentSpace && !currentSpace.isTemp ? currentSpace.id : null) ?? dedicatedSpaces[0]?.id ?? ''
+  )
+
+  const [showCreateSpaceForm, setShowCreateSpaceForm] = useState(false)
+
   // Import tab state machine
   const [importState, setImportState] = useState<ImportState>({ phase: 'idle' })
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
-
-  const [selectedSpaceId, setSelectedSpaceId] = useState(
-    currentSpace?.id ?? allSpaces[0]?.id ?? ''
-  )
+  const bodyScrollRef = useRef<HTMLDivElement>(null)
 
   // ── Form field updater ──
   const updateField = useCallback(<K extends keyof VisualFormState>(key: K, value: VisualFormState[K]) => {
@@ -674,9 +676,9 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     }
   }
 
-  const canCreate = mode === 'yaml'
+  const canCreate = dedicatedSpaces.length > 0 && (mode === 'yaml'
     ? yamlContent.trim().length > 0
-    : (form.name.trim().length > 0 && form.systemPrompt.trim().length > 0)
+    : (form.name.trim().length > 0 && form.systemPrompt.trim().length > 0))
 
   // ── Render ──
   return (
@@ -734,7 +736,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
         </div>
 
         {/* Body */}
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+        <div ref={bodyScrollRef} className="p-4 space-y-4 overflow-y-auto flex-1">
           {mode === 'visual' ? (
             <>
               <p className="text-xs text-muted-foreground">
@@ -791,13 +793,11 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
                 <label className="text-sm text-foreground">
                   {t('System Prompt')} <span className="text-red-400">*</span>
                 </label>
-                <textarea
+                <SystemPromptEditor
                   value={form.systemPrompt}
-                  onChange={e => updateField('systemPrompt', e.target.value)}
+                  onChange={v => updateField('systemPrompt', v)}
                   placeholder={t('Describe what this app should do on each scheduled run. This is the core instruction that drives the AI.')}
-                  rows={6}
-                  className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
-                  spellCheck={false}
+                  required
                 />
               </div>
 
@@ -853,7 +853,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
               isDragOver={isDragOver}
               fileInputRef={fileInputRef}
               folderInputRef={folderInputRef}
-              allSpaces={allSpaces}
+              allSpaces={dedicatedSpaces}
               selectedSpaceId={selectedSpaceId}
               onSelectedSpaceChange={setSelectedSpaceId}
               onDrop={handleImportDrop}
@@ -886,21 +886,71 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('Install to')}
               </h3>
-              {allSpaces.length <= 1 ? (
-                <p className="text-sm text-foreground">
-                  {allSpaces[0]?.name ?? t('No spaces available')}
-                </p>
-              ) : (
+              {dedicatedSpaces.length > 0 && (
                 <select
                   value={selectedSpaceId}
                   onChange={e => setSelectedSpaceId(e.target.value)}
                   className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
                 >
-                  {allSpaces.map(s => (
+                  {dedicatedSpaces.map(s => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
               )}
+              {dedicatedSpaces.length === 0 && (
+                <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-secondary border border-border text-sm text-muted-foreground">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-orange-400" />
+                  <span>{t('A digital human requires a dedicated space. Please create one first from the home page.')}</span>
+                </div>
+              )}
+              {/* New Space — accordion (toggle + body as one unit to avoid spacing leaks) */}
+              <div>
+                <button
+                  onClick={() => {
+                    const next = !showCreateSpaceForm
+                    setShowCreateSpaceForm(next)
+                    if (next) {
+                      // Scroll to bottom after CSS animation completes (200ms)
+                      setTimeout(() => {
+                        bodyScrollRef.current?.scrollTo({
+                          top: bodyScrollRef.current.scrollHeight,
+                          behavior: 'smooth',
+                        })
+                      }, 220)
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 text-xs transition-colors ${
+                    showCreateSpaceForm
+                      ? 'text-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>{t('New Space')}</span>
+                  <ChevronDown
+                    className={`w-3 h-3 transition-transform duration-200 ${showCreateSpaceForm ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {/* CSS grid height animation — padding inside so collapsed state is truly 0 */}
+                <div
+                  className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+                    showCreateSpaceForm ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                  }`}
+                >
+                  <div className="min-h-0 overflow-hidden">
+                    <div className="pt-2">
+                      <div className="rounded-lg border border-border bg-secondary/20 p-3">
+                        <CreateSpaceForm
+                          compact
+                          onCreated={(space) => { setSelectedSpaceId(space.id); setShowCreateSpaceForm(false) }}
+                          onCancel={() => setShowCreateSpaceForm(false)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -929,6 +979,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
           </div>
         )}
       </div>
+
     </div>
   )
 }

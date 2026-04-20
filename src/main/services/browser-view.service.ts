@@ -67,8 +67,8 @@ export interface BrowserViewCreateOptions {
 export const CHROME_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-// Mobile (H5) User-Agent — iPhone Safari is the safest default for Chinese H5 pages.
-// Most domestic H5 sites (including WeChat-embedded pages) are tested against iOS Safari.
+// Mobile (H5) User-Agent — iPhone Safari is the safest default for mobile H5 pages.
+// Most H5 sites are optimized for iOS Safari, making it the best emulation target.
 export const H5_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
 

@@ -67,6 +67,8 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     authType: 'api-key',
     apiUrl: 'https://api.anthropic.com',
     models: [
+      { id: 'claude-mythos-preview', name: 'Claude Mythos (Preview)' },
+      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
       { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5' },
       { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
@@ -448,6 +450,8 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     authType: 'oauth',
     apiUrl: 'https://api.anthropic.com',
     models: [
+      { id: 'claude-mythos-preview', name: 'Claude Mythos (Preview)' },
+      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
       { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5' },
       { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },

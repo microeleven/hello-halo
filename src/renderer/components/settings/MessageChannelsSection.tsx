@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
-  Plus, Trash2, MoreVertical,
+  Plus, Trash2, MoreVertical, Smartphone,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
@@ -30,7 +30,16 @@ import type {
 import type {
   ImChannelInstanceConfig,
   ImChannelInstanceStatus,
+  GuestPolicy,
 } from '../../../shared/types/im-channel'
+import { WeixinIlinkInstanceCard } from './WeixinIlinkInstanceCard'
+
+/** Product-level permission defaults (from IPC). Mirrors auth-loader.ImChannelsPermissionDefaults. */
+interface PermissionDefaults {
+  defaultEnabled?: boolean
+  defaultGuestAccess?: boolean
+  defaultGuestPolicy?: { allowedTools?: string[] }
+}
 
 // ============================================
 // Types
@@ -55,6 +64,8 @@ interface FieldDef {
   required?: boolean
   options?: { value: string; label: string }[]
   nested?: string
+  /** Optional group for collapsible sections (e.g. 'advanced') */
+  group?: string
 }
 
 /** Notification channel descriptor */
@@ -87,6 +98,8 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
         { key: 'smtp.user', label: 'Username', type: 'text', placeholder: 'user@example.com', required: true, nested: 'smtp.user' },
         { key: 'smtp.password', label: 'Password', type: 'password', placeholder: 'App password', required: true, nested: 'smtp.password' },
         { key: 'defaultTo', label: 'Default Recipient', type: 'text', placeholder: 'recipient@example.com', required: true },
+        { key: 'caldavUrl', label: 'CalDAV URL', type: 'text', placeholder: 'https://{host}/dav/users/{email}/calendars/default/', group: 'advanced' },
+        { key: 'tlsCiphers', label: 'TLS Ciphers', type: 'text', placeholder: 'Auto (system default)', group: 'advanced' },
       ],
       defaults: { enabled: false, smtp: { host: '', port: 465, secure: true, user: '', password: '' }, defaultTo: '' },
     },
@@ -306,6 +319,8 @@ interface InstanceCardProps {
   onChange: (instance: ImChannelInstanceConfig) => void
   onDelete: () => void
   onReconnect: () => void
+  /** Warning message when this instance's Bot ID conflicts with another instance */
+  duplicateWarning?: string
 }
 
 function InstanceCard({
@@ -317,6 +332,7 @@ function InstanceCard({
   onChange,
   onDelete,
   onReconnect,
+  duplicateWarning,
 }: InstanceCardProps) {
   const { t } = useTranslation()
   const isConnected = status?.connected ?? false
@@ -412,6 +428,21 @@ function InstanceCard({
     setDraft(null)
     onChange({ ...instance, appId })
   }
+
+  const handleStreamingChange = () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setDraft(null)
+    onChange({ ...instance, streaming: instance.streaming === false ? undefined : false })
+  }
+
+  const handleReplyScopeChange = (scope: string) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setDraft(null)
+    onChange({ ...instance, replyScope: scope as ImChannelInstanceConfig['replyScope'] })
+  }
+
+  const isStreamingEnabled = instance.streaming !== false
+  const replyScope = instance.replyScope ?? 'all'
 
   return (
     <div className="border border-border/60 rounded-lg overflow-hidden bg-card/50">
@@ -526,8 +557,13 @@ function InstanceCard({
                 value={(currentCfg.botId as string) ?? ''}
                 onChange={(e) => handleConfigChange('botId', e.target.value)}
                 placeholder="aib-xxx"
-                className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                className={`w-full bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary ${
+                  duplicateWarning ? 'border-amber-500' : 'border-border'
+                }`}
               />
+              {duplicateWarning && (
+                <p className="text-xs text-amber-500">{duplicateWarning}</p>
+              )}
             </div>
             <div className="space-y-1">
               <label className="text-sm text-muted-foreground">
@@ -577,12 +613,387 @@ function InstanceCard({
             </p>
           </div>
 
+          {/* Reply scope */}
+          <div className="space-y-1">
+            <label className="text-sm text-muted-foreground">{t('Reply Scope')}</label>
+            <select
+              value={replyScope}
+              onChange={(e) => handleReplyScopeChange(e.target.value)}
+              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
+            >
+              <option value="group">{t('Group chats only')}</option>
+              <option value="all">{t('All messages')}</option>
+              <option value="direct">{t('Direct messages only')}</option>
+            </select>
+            {replyScope === 'all' && (
+              <p className="text-xs text-amber-500">
+                {t('Caution: Enabling direct messages allows any user to interact with this digital human privately')}
+              </p>
+            )}
+            {replyScope === 'group' && (
+              <p className="text-xs text-muted-foreground">
+                {t('Private messages will be rejected for security')}
+              </p>
+            )}
+          </div>
+
+          {/* Streaming toggle */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <p className="text-sm text-muted-foreground">{t('Streaming')}</p>
+              <p className="text-xs text-muted-foreground/70">
+                {isStreamingEnabled
+                  ? t('Shows thinking process in real-time')
+                  : t('Only sends the final reply')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isStreamingEnabled}
+                onChange={handleStreamingChange}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                    isStreamingEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  } mt-0.5`}
+                />
+              </div>
+            </label>
+          </div>
+
+          {/* ── Permission Control ── */}
+          <PermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} />
+
           {/* Connection status */}
           {isEnabled && (
             <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
               <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// Permission Section (permissionEnabled + owners + guestPolicy)
+// ============================================
+
+/**
+ * Built-in tools that can be granted to guests.
+ * All tools are off by default — owners choose which to enable.
+ */
+const GUEST_SAFE_BUILTIN_TOOLS = [
+  { name: 'Read', group: 'file' },
+  { name: 'Glob', group: 'file' },
+  { name: 'Grep', group: 'file' },
+  { name: 'WebFetch', group: 'network' },
+  { name: 'WebSearch', group: 'network' },
+  { name: 'Agent', group: 'other' },
+  { name: 'TodoWrite', group: 'other' },
+  { name: 'Bash', group: 'advanced' },
+  { name: 'Write', group: 'advanced' },
+  { name: 'Edit', group: 'advanced' },
+  { name: 'NotebookEdit', group: 'advanced' },
+] as const
+
+/** Group labels for tool tags */
+const TOOL_GROUP_LABELS: Record<string, string> = {
+  file: 'File Read',
+  network: 'Network',
+  other: 'Other',
+  advanced: 'Advanced',
+}
+
+/**
+ * Halo MCP toggle definitions for the guest policy UI.
+ * Replaces the old free-text mcp__ input.
+ */
+const HALO_MCP_TOGGLES: { key: keyof GuestPolicy; labelKey: string }[] = [
+  { key: 'allowAiBrowser', labelKey: 'AI Browser' },
+  { key: 'allowEmail',     labelKey: 'Email' },
+  { key: 'allowNotify',    labelKey: 'Notifications' },
+  { key: 'allowApps',      labelKey: 'Digital Humans' },
+  { key: 'allowFileSend',  labelKey: 'File Send' },
+]
+
+interface PermissionSectionProps {
+  instance: ImChannelInstanceConfig
+  /** Immediate save (for toggles) */
+  onChange: (instance: ImChannelInstanceConfig) => void
+  /** Debounced save (for text fields — 500ms delay, same as config fields) */
+  onDebouncedChange: (instance: ImChannelInstanceConfig) => void
+}
+
+function PermissionSection({ instance, onChange, onDebouncedChange }: PermissionSectionProps) {
+  const { t } = useTranslation()
+  const permissionEnabled = instance.permissionEnabled ?? false
+  const owners = instance.owners ?? []
+  const hasOwners = owners.length > 0
+  const guestPolicy = instance.guestPolicy
+  const guestAccessEnabled = hasOwners && guestPolicy !== undefined
+
+  // Load installed MCP apps for the user MCP whitelist
+  const { apps } = useAppsStore()
+  const mcpApps = apps.filter(a => a.spec.type === 'mcp')
+
+  // Local draft state for text fields (avoids cursor jumping during debounce)
+  const [ownersDraft, setOwnersDraft] = useState<string | null>(null)
+
+  // Derive display values
+  const currentAllowedTools = guestPolicy?.allowedTools ?? []
+  const builtinNames = new Set(GUEST_SAFE_BUILTIN_TOOLS.map(t => t.name))
+  const selectedBuiltinTools = new Set(currentAllowedTools.filter(t => builtinNames.has(t)))
+
+  const ownersDisplay = ownersDraft ?? owners.join(', ')
+
+  // ── Handlers ──
+
+  const handlePermissionToggle = () => {
+    onChange({ ...instance, permissionEnabled: !permissionEnabled })
+  }
+
+  const handleOwnersChange = (value: string) => {
+    setOwnersDraft(value)
+    const parsed = value
+      .split(/[,\n]/)
+      .map(s => s.trim())
+      .filter(Boolean)
+    onDebouncedChange({
+      ...instance,
+      owners: parsed.length > 0 ? parsed : undefined,
+    })
+  }
+
+  const handleOwnersBlur = () => {
+    setOwnersDraft(null)
+  }
+
+  const handleGuestAccessToggle = () => {
+    if (guestAccessEnabled) {
+      onChange({ ...instance, guestPolicy: undefined })
+    } else {
+      onChange({ ...instance, guestPolicy: { allowedTools: [] } })
+    }
+  }
+
+  const handleBuiltinToolToggle = (toolName: string) => {
+    const newSet = new Set(selectedBuiltinTools)
+    if (newSet.has(toolName)) {
+      newSet.delete(toolName)
+    } else {
+      newSet.add(toolName)
+    }
+    onChange({ ...instance, guestPolicy: { ...guestPolicy, allowedTools: Array.from(newSet) } })
+  }
+
+  const handleMcpToggle = (key: keyof GuestPolicy) => {
+    const current = guestPolicy?.[key] as boolean | undefined
+    onChange({ ...instance, guestPolicy: { ...guestPolicy, [key]: !current } })
+  }
+
+  const handleUserMcpToggle = (specId: string) => {
+    const current = guestPolicy?.allowedUserMcp ?? []
+    const updated = current.includes(specId)
+      ? current.filter(s => s !== specId)
+      : [...current, specId]
+    onChange({
+      ...instance,
+      guestPolicy: { ...guestPolicy, allowedUserMcp: updated.length > 0 ? updated : undefined },
+    })
+  }
+
+  // ── Render ──
+
+  return (
+    <div className="space-y-2">
+      {/* Master toggle */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
+          <p className="text-xs text-muted-foreground/70">
+            {permissionEnabled
+              ? t('Restrict access by owner/guest roles')
+              : t('Everyone has full access')}
+          </p>
+        </div>
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input
+            type="checkbox"
+            checked={permissionEnabled}
+            onChange={handlePermissionToggle}
+            className="sr-only peer"
+          />
+          <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+            <div
+              className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                permissionEnabled ? 'translate-x-5' : 'translate-x-0.5'
+              } mt-0.5`}
+            />
+          </div>
+        </label>
+      </div>
+
+      {/* Permission details (only when enabled) */}
+      {permissionEnabled && (
+        <div className="space-y-3 pl-1 animate-in slide-in-from-top-1 duration-150">
+          {/* Owners */}
+          <div className="space-y-1">
+            <label className="text-sm text-muted-foreground">
+              {t('Owner User IDs')}
+            </label>
+            <textarea
+              value={ownersDisplay}
+              onChange={(e) => handleOwnersChange(e.target.value)}
+              onBlur={handleOwnersBlur}
+              placeholder={t('e.g. zhangsan, lisi (comma separated)')}
+              rows={2}
+              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('Owners have full access. Others are guests.')}
+            </p>
+          </div>
+
+          {/* Guest access toggle (only when owners are set) */}
+          {hasOwners && (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm text-muted-foreground">{t('Guest Access')}</p>
+                  <p className="text-xs text-muted-foreground/70">
+                    {guestAccessEnabled
+                      ? t('Guests have limited access')
+                      : t('Guests have no access')}
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={guestAccessEnabled}
+                    onChange={handleGuestAccessToggle}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                        guestAccessEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                      } mt-0.5`}
+                    />
+                  </div>
+                </label>
+              </div>
+
+              {/* Tool selection (only when guest access is enabled) */}
+              {guestAccessEnabled && (
+                <div className="space-y-2">
+                  <label className="text-sm text-muted-foreground">
+                    {t('Allowed Tools')}
+                  </label>
+
+                  {/* Built-in tool tags grouped — unchanged from original */}
+                  {Object.entries(TOOL_GROUP_LABELS).map(([group, label]) => {
+                    const tools = GUEST_SAFE_BUILTIN_TOOLS.filter(t => t.group === group)
+                    if (tools.length === 0) return null
+                    return (
+                      <div key={group} className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-muted-foreground/70 w-14 sm:w-16 shrink-0">
+                          {t(label)}
+                        </span>
+                        {tools.map(tool => {
+                          const isSelected = selectedBuiltinTools.has(tool.name)
+                          return (
+                            <button
+                              key={tool.name}
+                              type="button"
+                              onClick={() => handleBuiltinToolToggle(tool.name)}
+                              className={`px-2 py-0.5 text-xs rounded-md border transition-colors ${
+                                isSelected
+                                  ? 'bg-primary/15 text-primary border-primary/30'
+                                  : 'bg-muted text-muted-foreground border-border hover:border-primary/20'
+                              }`}
+                            >
+                              {tool.name}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )
+                  })}
+
+                  {/* MCP capabilities — replaces old free-text mcp__ input */}
+                  <div className="mt-2 pt-2 border-t border-border/40 space-y-3">
+                    {/* Halo built-in MCP toggles */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground/70">
+                        {t('Halo Capabilities')}
+                      </label>
+                      {HALO_MCP_TOGGLES.map(({ key, labelKey }) => {
+                        const isOn = Boolean(guestPolicy?.[key])
+                        return (
+                          <div key={key} className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">{t(labelKey)}</p>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={isOn}
+                                onChange={() => handleMcpToggle(key)}
+                                className="sr-only peer"
+                              />
+                              <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                                <div
+                                  className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform ${
+                                    isOn ? 'translate-x-4' : 'translate-x-0.5'
+                                  } mt-0.5`}
+                                />
+                              </div>
+                            </label>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {/* User-installed MCP servers (only shown when any are installed) */}
+                    {mcpApps.length > 0 && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground/70">
+                        {t('Installed MCP Servers')}
+                      </label>
+                      {mcpApps.map(app => {
+                      const specId = app.specId
+                      const isAllowed = guestPolicy?.allowedUserMcp?.includes(specId) ?? false
+                      return (
+                        <div key={specId} className="flex items-center justify-between">
+                          <p className="text-sm text-muted-foreground">{app.spec.name}</p>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isAllowed}
+                              onChange={() => handleUserMcpToggle(specId)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                              <div
+                                className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform ${
+                                  isAllowed ? 'translate-x-4' : 'translate-x-0.5'
+                                } mt-0.5`}
+                              />
+                            </div>
+                          </label>
+                        </div>
+                      )
+                    })}
+                  </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -618,6 +1029,7 @@ function NotifyChannelCard({
   const { t } = useTranslation()
   const Icon = def.icon
   const isEnabled = Boolean(channelConfig?.enabled)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -696,7 +1108,7 @@ function NotifyChannelCard({
           </div>
 
           <div className="space-y-3">
-            {def.fields.map((field) => (
+            {def.fields.filter(f => !f.group).map((field) => (
               <ChannelField
                 key={field.key}
                 field={field}
@@ -705,6 +1117,35 @@ function NotifyChannelCard({
               />
             ))}
           </div>
+
+          {/* Advanced fields (collapsible) */}
+          {def.fields.some(f => f.group === 'advanced') && (
+            <div className="border-t border-border/60 pt-3">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${showAdvanced ? 'rotate-180' : ''}`} />
+                {t('Advanced')}
+              </button>
+              {showAdvanced && (
+                <div className="mt-3 space-y-3 animate-in slide-in-from-top-1 duration-150">
+                  {def.fields.filter(f => f.group === 'advanced').map((field) => (
+                    <ChannelField
+                      key={field.key}
+                      field={field}
+                      value={getFieldValue(field)}
+                      onChange={(value) => handleFieldChange(field.key, value, field.nested)}
+                    />
+                  ))}
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    {t('CalDAV URL enables calendar tools. Supports {host} and {email} placeholders.')}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center gap-3 pt-2 flex-wrap">
             <button
@@ -741,12 +1182,22 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
+  const [permissionDefaults, setPermissionDefaults] = useState<PermissionDefaults | null>(null)
 
   // Load automation apps for the digital human selector
   const { apps, loadApps } = useAppsStore()
   const automationApps = apps.filter(a => a.spec.type === 'automation')
 
   useEffect(() => { loadApps() }, [loadApps])
+
+  // Load product-level permission defaults (once)
+  useEffect(() => {
+    api.imChannelsPermissionDefaults()
+      .then((res: { success?: boolean; data?: PermissionDefaults | null }) => {
+        if (res.success && res.data) setPermissionDefaults(res.data)
+      })
+      .catch(() => { /* defaults stay null — no restrictions */ })
+  }, [])
 
   // Poll IM channel statuses
   useEffect(() => {
@@ -780,23 +1231,51 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     }
   }, [config, setConfig])
 
+  /**
+   * Check if a given instance has a duplicate Bot ID among other enabled instances.
+   * Returns a warning message if duplicate found, undefined otherwise.
+   */
+  const getDuplicateWarning = useCallback((instance: ImChannelInstanceConfig, allInstances: ImChannelInstanceConfig[]): string | undefined => {
+    const botId = (instance.config.botId as string)?.trim()
+    if (!botId || !instance.enabled) return undefined
+    const duplicate = allInstances.find(
+      other => other.id !== instance.id
+        && other.type === instance.type
+        && other.enabled
+        && (other.config.botId as string)?.trim() === botId
+    )
+    if (duplicate) {
+      return t('This Bot ID is already in use by another instance. Each Bot can only be bound to one digital human.')
+    }
+    return undefined
+  }, [t])
+
   const handleInstanceChange = useCallback((updated: ImChannelInstanceConfig) => {
     const newInstances = instances.map(i => i.id === updated.id ? updated : i)
     saveInstances(newInstances)
   }, [instances, saveInstances])
 
   const handleAddInstance = useCallback(() => {
+    // Apply product-level permission defaults for new instances
+    const pd = permissionDefaults
     const newInstance: ImChannelInstanceConfig = {
       id: generateId(),
       type: 'wecom-bot',
       enabled: false,
       appId: '',
       config: { botId: '', secret: '', wsUrl: '' },
+      replyScope: 'group', // Secure default for new instances
+      permissionEnabled: pd?.defaultEnabled ?? false,
+      ...(pd?.defaultEnabled ? {
+        guestPolicy: pd.defaultGuestAccess
+          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
+          : undefined,
+      } : {}),
     }
     const newInstances = [...instances, newInstance]
     saveInstances(newInstances)
     setExpandedInstances(prev => new Set(prev).add(newInstance.id))
-  }, [instances, saveInstances])
+  }, [instances, saveInstances, permissionDefaults])
 
   const handleDeleteInstance = useCallback((instanceId: string) => {
     const newInstances = instances.filter(i => i.id !== instanceId)
@@ -866,22 +1345,52 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     return raw ? (raw as unknown as Record<string, unknown>) : {}
   }
 
-  // Summary for the IM channel card header
-  const wecomInstances = instances.filter(i => i.type === 'wecom-bot')
-  const connectedCount = imStatuses.filter(s => s.connected).length
-  const imStatusSummary = wecomInstances.length === 0
+  // Summary helpers for IM channel card headers
+  const wecomInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'wecom-bot')
+  const weixinIlinkInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'weixin-ilink-bot')
+
+  const wecomConnectedCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.connected).length
+  const weixinConnectedCount = imStatuses.filter(s => s.type === 'weixin-ilink-bot' && s.connected).length
+
+  const wecomStatusSummary = wecomInstances.length === 0
     ? t('Not configured')
-    : connectedCount > 0
-      ? `${connectedCount} ${t('connected')}`
+    : wecomConnectedCount > 0
+      ? `${wecomConnectedCount} ${t('connected')}`
       : t('Disconnected')
 
-  const imStatusColor = wecomInstances.length === 0
+  const wecomStatusColor = wecomInstances.length === 0
     ? 'bg-muted-foreground/30'
-    : connectedCount > 0
+    : wecomConnectedCount > 0
+      ? 'bg-green-500'
+      : 'bg-amber-500'
+
+  const weixinStatusSummary = weixinIlinkInstances.length === 0
+    ? t('Not configured')
+    : weixinConnectedCount > 0
+      ? `${weixinConnectedCount} ${t('connected')}`
+      : t('Disconnected')
+
+  const weixinStatusColor = weixinIlinkInstances.length === 0
+    ? 'bg-muted-foreground/30'
+    : weixinConnectedCount > 0
       ? 'bg-green-500'
       : 'bg-amber-500'
 
   const isImExpanded = expandedChannels.has('im-wecom-bot')
+  const isWeixinExpanded = expandedChannels.has('im-weixin-ilink-bot')
+
+  const handleAddWeixinInstance = useCallback(() => {
+    const newInstance: ImChannelInstanceConfig = {
+      id: generateId(),
+      type: 'weixin-ilink-bot',
+      enabled: false,
+      appId: '',
+      config: { botToken: '', baseUrl: '', accountId: '' },
+    }
+    const newInstances = [...instances, newInstance]
+    saveInstances(newInstances)
+    setExpandedInstances(prev => new Set(prev).add(newInstance.id))
+  }, [instances, saveInstances])
 
   return (
     <section id="message-channels" className="bg-card rounded-xl border border-border p-4 sm:p-6">
@@ -893,6 +1402,70 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       </div>
 
       <div className="space-y-3">
+        {/* ── WeChat Personal Bot via iLink (multi-instance) ─────────── */}
+        <div className="border border-border rounded-lg overflow-hidden">
+          {/* Provider card header */}
+          <button
+            type="button"
+            onClick={() => toggleExpanded('im-weixin-ilink-bot')}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <Smartphone className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+              <div className="text-left min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-medium text-sm">{t('WeChat Bot')}</p>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-primary/10 text-primary">
+                    {t('Bidirectional')}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">
+                  {t('Bidirectional messaging via WeChat personal account (iLink)')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+              <span className="text-xs text-muted-foreground hidden sm:inline">{weixinStatusSummary}</span>
+              <div className={`w-2 h-2 rounded-full ${weixinStatusColor}`} />
+              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isWeixinExpanded ? 'rotate-180' : ''}`} />
+            </div>
+          </button>
+
+          {/* Instance list */}
+          {isWeixinExpanded && (
+            <div className="px-4 pb-4 pt-2 border-t border-border space-y-2.5 animate-in slide-in-from-top-1 duration-150">
+              {weixinIlinkInstances.length === 0 && (
+                <p className="text-sm text-muted-foreground py-2 text-center">
+                  {t('No Bot instances configured. Click the button below to add one.')}
+                </p>
+              )}
+
+              {weixinIlinkInstances.map(inst => (
+                <WeixinIlinkInstanceCard
+                  key={inst.id}
+                  instance={inst}
+                  status={imStatuses.find(s => s.id === inst.id)}
+                  automationApps={automationApps}
+                  isExpanded={expandedInstances.has(inst.id)}
+                  onToggle={() => toggleInstanceExpanded(inst.id)}
+                  onChange={handleInstanceChange}
+                  onDelete={() => handleDeleteInstance(inst.id)}
+                />
+              ))}
+
+              {/* Add instance button */}
+              <button
+                type="button"
+                onClick={handleAddWeixinInstance}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm border border-dashed border-border rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/50 hover:bg-muted/30 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                {t('Add Bot')}
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* ── WeCom Intelligent Bot (multi-instance) ─────────────────── */}
         <div className="border border-border rounded-lg overflow-hidden">
           {/* Provider card header */}
@@ -916,8 +1489,8 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
               </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              <span className="text-xs text-muted-foreground hidden sm:inline">{imStatusSummary}</span>
-              <div className={`w-2 h-2 rounded-full ${imStatusColor}`} />
+              <span className="text-xs text-muted-foreground hidden sm:inline">{wecomStatusSummary}</span>
+              <div className={`w-2 h-2 rounded-full ${wecomStatusColor}`} />
               <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isImExpanded ? 'rotate-180' : ''}`} />
             </div>
           </button>
@@ -942,6 +1515,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   onChange={handleInstanceChange}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
+                  duplicateWarning={getDuplicateWarning(inst, instances)}
                 />
               ))}
 

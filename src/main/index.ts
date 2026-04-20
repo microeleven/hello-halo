@@ -156,6 +156,7 @@ import { initAnalytics } from './services/analytics'
 import { registerProtocols } from './services/protocol.service'
 import { setMainWindow } from './services/window.service'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
+import { initSdk } from './services/agent/resolved-sdk'
 
 let mainWindow: BrowserWindow | null = null
 let isAppQuitting = false
@@ -418,6 +419,11 @@ app.whenReady().then(async () => {
 
   // Initialize app data directories
   await initializeApp()
+
+  // Initialize SDK engine (must be after config is loaded, before any SDK usage)
+  // This loads the configured engine (halo or anthropic) dynamically.
+  // Hard constraint: if the configured SDK is not available, startup fails.
+  await initSdk()
 
   // Initialize health system instance ID (synchronous, <1ms)
   // Must be called before any subprocess is spawned

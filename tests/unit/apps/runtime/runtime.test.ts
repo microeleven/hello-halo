@@ -67,11 +67,55 @@ vi.mock('../../../../src/main/services/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({}),
   getTempSpacePath: vi.fn().mockReturnValue('/tmp/halo-test/temp'),
   onNetworkConfigChange: vi.fn(),
+  onAgentConfigChange: vi.fn(),
 }))
 
 // Mock space service (used by index.ts)
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: vi.fn().mockReturnValue(null),
+}))
+
+// Mock http/websocket (used by service.ts for broadcasting)
+vi.mock('../../../../src/main/http/websocket', () => ({
+  broadcastToAll: vi.fn(),
+}))
+
+// Mock window service (used by service.ts for IPC to renderer)
+vi.mock('../../../../src/main/services/window.service', () => ({
+  sendToRenderer: vi.fn(),
+}))
+
+// Mock notification service (imports electron Notification + notify-channels → proxy-fetch → electron)
+vi.mock('../../../../src/main/services/notification.service', () => ({
+  notifyAppEvent: vi.fn(),
+}))
+
+// Mock AI browser (imports electron BrowserWindow)
+vi.mock('../../../../src/main/services/ai-browser', () => ({
+  createAIBrowserMcpServer: vi.fn().mockReturnValue({ name: 'mock-ai-browser', _isMcpServer: true }),
+  createScopedBrowserContext: vi.fn(),
+  getAIBrowserSdkToolNames: vi.fn().mockReturnValue([]),
+}))
+
+// Mock web-search (may import electron transitively)
+vi.mock('../../../../src/main/services/web-search', () => ({
+  createWebSearchMcpServer: vi.fn().mockReturnValue({ name: 'mock-web-search', _isMcpServer: true }),
+}))
+
+// Mock email-mcp
+vi.mock('../../../../src/main/services/email-mcp', () => ({
+  createEmailMcpServer: vi.fn().mockReturnValue(null),
+}))
+
+// Mock session-manager (imports electron transitively)
+vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  getOrCreateV2Session: vi.fn(),
+  migrateSessionIfNeeded: vi.fn(),
+}))
+
+// Mock resolved-sdk
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
+  createSession: vi.fn(),
 }))
 
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
@@ -1870,7 +1914,7 @@ describe('AppRuntimeService', () => {
       ).rejects.toThrow(EscalationNotFoundError)
     })
 
-    it('should record response and clear waiting_user status', async () => {
+    it('should record response, reopen original run, and clear waiting_user status', async () => {
       const entryId = randomUUID()
       store.insertEntry({
         id: entryId,
@@ -1906,6 +1950,11 @@ describe('AppRuntimeService', () => {
 
       // Verify status was updated
       expect(mockAppManager.updateStatus).toHaveBeenCalledWith(testAppId, 'active')
+
+      // Verify the original run was reopened (waiting_user → running)
+      // instead of creating a new run
+      const run = store.getRun('run-001')
+      expect(run!.status).toBe('running')
     })
   })
 

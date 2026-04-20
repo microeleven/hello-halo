@@ -10,7 +10,7 @@ Run `npm run i18n` before commit by user.
 
 **rules.**
 - Any code changes（edit/delete/move） require human confirmation and consent.
-- You must read the hao-dev specifications before writing code.
+- You must read the halo-dev specifications before writing code.
   
 **tips.**
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).

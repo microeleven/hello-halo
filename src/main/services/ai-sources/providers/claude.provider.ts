@@ -181,6 +181,9 @@ class ClaudeProvider implements OAuthAISourceProvider {
     // Claude OAuth uses the same models as regular Anthropic API
     // [1m] suffix indicates 1M context window variant (stripped before API call)
     return [
+      'claude-mythos-preview',
+      'claude-opus-4-7',
+      'claude-opus-4-7[1m]',
       'claude-opus-4-6',
       'claude-opus-4-6[1m]',
       'claude-opus-4-5-20251101',
@@ -314,6 +317,9 @@ class ClaudeProvider implements OAuthAISourceProvider {
       // Get available models
       const models = await this.getAvailableModels({} as AISourcesConfig)
       const modelNames: Record<string, string> = {
+        'claude-mythos-preview': 'Claude Mythos (Preview)',
+        'claude-opus-4-7': 'Claude Opus 4.7',
+        'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
         'claude-opus-4-6': 'Claude Opus 4.6',
         'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
         'claude-opus-4-5-20251101': 'Claude Opus 4.5',
@@ -468,6 +474,9 @@ class ClaudeProvider implements OAuthAISourceProvider {
     try {
       const models = await this.getAvailableModels(config)
       const modelNames: Record<string, string> = {
+        'claude-mythos-preview': 'Claude Mythos (Preview)',
+        'claude-opus-4-7': 'Claude Opus 4.7',
+        'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
         'claude-opus-4-6': 'Claude Opus 4.6',
         'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
         'claude-opus-4-5-20251101': 'Claude Opus 4.5',

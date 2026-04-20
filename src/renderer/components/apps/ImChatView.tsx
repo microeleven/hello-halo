@@ -19,6 +19,7 @@ import { StreamingSection } from '../chat/StreamingSection'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
 import { CompactNotice } from '../chat/CompactNotice'
+import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -39,6 +40,9 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   const { t } = useTranslation()
 
   const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
+
+  // ── Subscribe to agent events (remote/Capacitor clients use WebSocket) ──
+  useRemoteSubscription(conversationId)
 
   // Persisted messages
   const [messages, setMessages] = useState<Message[]>([])

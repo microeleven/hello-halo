@@ -47,9 +47,10 @@ import { MIGRATION_NAMESPACE, migrations } from './migrations'
 import { createEventRouter, type EventRouter } from './event-router'
 import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
-import { ImChannelManager, WecomBotProvider } from './im-channels'
+import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { dispatchInboundMessage } from './dispatch-inbound'
+import { clearAllImPermissionContexts } from './im-permission-registry'
 import { getConfig } from '../../services/config.service'
 import { getDataFolderName } from '../../services/ai-sources/auth-loader'
 import type { AppRuntimeService } from './types'
@@ -103,9 +104,21 @@ export type { AppChatRequest } from './app-chat'
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
 
+// Re-export IM permission registry
+export {
+  setImPermissionContext,
+  getImPermissionContext,
+  clearImPermissionContext,
+  clearAllImPermissionContexts,
+} from './im-permission-registry'
+export type { ImPermissionContext } from './im-permission-registry'
+
 // Re-export IM session registry accessor
 export { getImSessionRegistry } from './im-session-registry'
 export { ImSessionRegistry } from './im-session-registry'
+
+// Re-export IM session invalidation (called by IPC reload handler)
+export { invalidateImSessions } from '../../services/agent/session-manager'
 
 // Re-export ImChannelManager for IPC/HTTP access
 export { ImChannelManager } from './im-channels'
@@ -229,8 +242,13 @@ export async function initAppRuntime(
   const imChannelManager = new ImChannelManager()
   imChannelManagerInstance = imChannelManager
 
+  // Expose via module-level accessor so dispatch-inbound.ts can resolve
+  // fileCapability without a circular import (dispatch-inbound ← index ← dispatch-inbound).
+  setActiveImChannelManager(imChannelManager)
+
   // Register built-in providers
   imChannelManager.registerProvider(new WecomBotProvider())
+  imChannelManager.registerProvider(new WeixinIlinkBotProvider())
   // Future: imChannelManager.registerProvider(new FeishuBotProvider())
   // Future: imChannelManager.registerProvider(new DingTalkBotProvider())
 
@@ -347,10 +365,14 @@ export async function shutdownAppRuntime(): Promise<void> {
   if (imChannelManagerInstance) {
     imChannelManagerInstance.stopAll()
     imChannelManagerInstance = null
+    setActiveImChannelManager(null)
   }
 
   imSessionRegistryInstance = null
   setImSessionRegistry(null as any)
+
+  // Clear all IM permission contexts (in-memory only, no persistence needed)
+  clearAllImPermissionContexts()
 
   console.log('[Runtime] App Runtime shutdown complete')
 }

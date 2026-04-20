@@ -397,6 +397,30 @@ export function onNetworkConfigChange(handler: NetworkConfigChangeHandler): () =
   }
 }
 
+// ============================================================================
+// Agent config change subscribers
+// Notified synchronously when agent config is saved, so modules like http-logger
+// can update their in-memory state without reading config.json on every request.
+// ============================================================================
+
+type AgentConfigChangeHandler = (agent: HaloConfig['agent']) => void
+const agentConfigChangeHandlers: AgentConfigChangeHandler[] = []
+
+/**
+ * Register a callback to be notified when agent config changes.
+ * Called synchronously inside saveConfig so the state is hot before the
+ * next operation.
+ *
+ * @returns Unsubscribe function
+ */
+export function onAgentConfigChange(handler: AgentConfigChangeHandler): () => void {
+  agentConfigChangeHandlers.push(handler)
+  return () => {
+    const idx = agentConfigChangeHandlers.indexOf(handler)
+    if (idx >= 0) agentConfigChangeHandlers.splice(idx, 1)
+  }
+}
+
 // Types (shared with renderer)
 interface HaloConfig {
   api: {
@@ -425,8 +449,11 @@ interface HaloConfig {
     promptProfile?: 'official' | 'halo'
     configDirMode?: 'halo' | 'cc' | 'custom'
     customConfigDir?: string
-    /** Experimental: switch agent engine. 'cc' = Claude Code SDK (default), 'halo' = Halo SDK. */
-    sdkEngine?: 'cc' | 'halo'
+    /** Experimental: switch agent engine. 'anthropic' = Claude Code SDK (default), 'halo' = Halo SDK. */
+    sdkEngine?: 'anthropic' | 'halo'
+    enableTeams?: boolean
+    /** Developer: log raw outbound HTTP requests to http-raw.log */
+    logHttpRequests?: boolean
   }
   remoteAccess: {
     enabled: boolean
@@ -999,6 +1026,14 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   }
   if (config.agent) {
     newConfig.agent = { ...currentConfig.agent, ...config.agent }
+    // Notify synchronously — consumers update in-memory state immediately
+    if (agentConfigChangeHandlers.length > 0) {
+      agentConfigChangeHandlers.forEach(handler => {
+        try { handler(newConfig.agent) } catch (e) {
+          console.error('[Config] Error in agent config change handler:', e)
+        }
+      })
+    }
   }
   if (config.onboarding) {
     newConfig.onboarding = { ...currentConfig.onboarding, ...config.onboarding }

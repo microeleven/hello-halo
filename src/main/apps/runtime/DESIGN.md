@@ -156,23 +156,42 @@ token usage but does NOT stream individual events to the renderer.
 **Decision**: `report_to_user` is the definitive completion signal for
 automation runs. If the LLM ends a turn without calling it (and no SDK error
 occurred), the runtime automatically sends a follow-up message prompting the
-AI to continue — up to `MAX_AUTO_CONTINUES` (3) times.
+AI to continue — up to `MAX_AUTO_CONTINUES` (10) times. If all auto-retries
+are exhausted the run is marked as `error`, and the user may manually resume
+via the "Continue" button (in the Activity Thread or Session Detail view).
+
+**Auto-continue loop**:
+- Each retry sends a single unified message: `"Continue. " + AUTO_CONTINUE_MESSAGE`
+  (no graduated messaging — one clear, consistent reminder).
+- `MAX_AUTO_CONTINUES = 10` (was 3). Raised to tolerate longer periods of
+  context pressure or transient backend issues without user intervention.
+- After all retries: the run's `sessionId` is persisted on the DB record so the
+  session can be restored on user-initiated continue.
+
+**User-initiated continue** (`trigger_type = 'continue_followup'`):
+- Triggered by the "Continue" button on `run_error` activity entries where
+  `content.error === 'report_to_user not called'`.
+- Uses the same session restore pattern as `escalation_followup`:
+  `getOrCreateV2Session(resumeSessionId)` preserves full conversation history.
+- Same `runId` is reopened (`store.reopenRun()` resets status `error → running`)
+  so the Activity Thread entry updates in-place (no duplicate entry).
+- Sends only `"Continue."` as the initial message (no reminder — the user's
+  intent is clear and context is already in the session).
+- Resets the auto-continue counter to 0; the 10-retry loop runs again.
+  This cycle repeats indefinitely until `report_to_user` is finally called.
 
 **Rationale**:
 - LLMs occasionally return `end_turn` prematurely due to model quirks, context
   issues, or non-deterministic behavior. In interactive sessions a human types
   "continue"; automation runs have no human operator.
-- `report_to_user` is already mandated by the system prompt ("ALWAYS call this
-  at the end of every execution") and powers the Activity Thread. Using it as
-  the completion gate adds zero new concepts.
-- The graduated messaging (normal prompt → final warning) gives the model
-  clear signals. If all attempts fail, the run is marked as error and counts
-  toward the consecutive-error auto-pause threshold.
+- `report_to_user` is already mandated by the system prompt and powers the
+  Activity Thread. Using it as the completion gate adds zero new concepts.
 - `MAX_TURNS` raised from 30 → 100 to give autonomous runs more room before
   per-cycle turn limits are hit.
 
-**Trade-off**: Up to 3 extra LLM round-trips in pathological cases. Acceptable
-because the alternative is a silently incomplete run with no user-visible output.
+**Trade-off**: Up to 10 extra LLM round-trips per cycle in pathological cases,
+plus indefinite user-driven cycles. Acceptable: the alternative is a silently
+incomplete run with no recovery path.
 
 ---
 

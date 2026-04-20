@@ -26,11 +26,60 @@
 import type { InboundMessage, ReplyHandle } from './inbound-message'
 
 // ============================================
+// GuestPolicy (IM permission control)
+// ============================================
+
+/**
+ * Permission policy for non-owner (guest) users in IM channels.
+ *
+ * White-list model: only explicitly listed tools are allowed.
+ * When `allowedTools` is undefined, all tools are allowed (no restriction).
+ * When `allowedTools` is an empty array, no tools are allowed.
+ *
+ * At runtime, this list is split by prefix:
+ *   - Built-in tools (no prefix) → SDK `disallowedTools` (inverted whitelist)
+ *   - MCP tools (`mcp__*`)       → legacy; replaced by injection-control fields below
+ *
+ * Used by ImChannelInstanceConfig (persisted) and ImPermissionContext (runtime).
+ */
+export interface GuestPolicy {
+  /**
+   * Built-in tool names the guest is allowed to use (white-list).
+   * All built-in tools are selectable in the UI (advanced tools like
+   * Bash, Write, Edit, NotebookEdit are in a separate group). All off by default.
+   *
+   * undefined = all tools allowed (no tool restriction)
+   * []        = no tools allowed
+   */
+  allowedTools?: string[]
+
+  // ── Halo MCP injection control (new — replaces mcp__ entries in allowedTools) ──
+  // Conservative strategy: not configured = not injected for guests.
+
+  /** Allow guest to use AI browser */
+  allowAiBrowser?: boolean
+  /** Allow guest to send email on behalf of owner */
+  allowEmail?: boolean
+  /** Allow guest to send notifications */
+  allowNotify?: boolean
+  /** Allow guest to manage digital humans */
+  allowApps?: boolean
+  /** Allow guest to send files via IM */
+  allowFileSend?: boolean
+
+  /**
+   * User-installed MCP server names (specId) that guests are allowed to use.
+   * Only servers in this list are injected into guest sessions.
+   */
+  allowedUserMcp?: string[]
+}
+
+// ============================================
 // ImChannelInstanceConfig (Persisted)
 // ============================================
 
 /** Supported IM channel provider types */
-export type ImChannelType = 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot'
+export type ImChannelType = 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot' | 'weixin-ilink-bot'
 
 /**
  * Persisted configuration for a single IM channel instance.
@@ -39,7 +88,7 @@ export type ImChannelType = 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot'
 export interface ImChannelInstanceConfig {
   /** Auto-generated UUID for this instance */
   id: string
-  /** Provider type: 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot' */
+  /** Provider type — see ImChannelType for the full union */
   type: ImChannelType
   /** Whether this instance is enabled */
   enabled: boolean
@@ -47,6 +96,52 @@ export interface ImChannelInstanceConfig {
   appId: string
   /** Provider-specific configuration (e.g., botId, secret, wsUrl for WeCom) */
   config: Record<string, unknown>
+  /**
+   * Whether to enable streaming (thinking process + tool calls) for this instance.
+   * When false, only the final reply is sent — no intermediate progress events.
+   * Default: true (streaming enabled).
+   */
+  streaming?: boolean
+  /**
+   * Reply scope — controls which chat types this instance responds to.
+   *   'all'    — respond to both group and direct messages
+   *   'group'  — only respond in group chats (secure)
+   *   'direct' — only respond to direct messages
+   *
+   * Runtime default (when undefined): 'all' for backward compatibility.
+   * New instances created via UI default to 'group' for security.
+   */
+  replyScope?: 'all' | 'group' | 'direct'
+
+  /**
+   * Master switch for permission control on this channel instance.
+   *
+   * false/undefined = no restrictions, everyone has full access (personal use default).
+   * true            = owners/guestPolicy are enforced.
+   *
+   * When false, the `owners` and `guestPolicy` fields are stored but ignored at runtime,
+   * so toggling the switch off doesn't lose user configuration.
+   */
+  permissionEnabled?: boolean
+
+  /**
+   * Owner user IDs for this channel instance (platform-side user IDs).
+   * Owners have unrestricted access to all tools and paths.
+   * Only effective when `permissionEnabled` is true.
+   *
+   * undefined or [] = everyone is treated as owner (no restriction).
+   * Non-empty array  = only listed IDs are owners; others are guests.
+   *
+   * IDs are platform-specific: WeCom userid, Feishu open_id, DingTalk staffId, etc.
+   */
+  owners?: string[]
+
+  /**
+   * Permission policy applied to non-owner (guest) users.
+   * Only effective when `permissionEnabled` is true and `owners` is a non-empty array.
+   * When undefined, guests have no tool or path access (deny-all default).
+   */
+  guestPolicy?: GuestPolicy
 }
 
 // ============================================
@@ -137,6 +232,44 @@ export interface ImChannelInstance {
    * The Manager calls this once after creating the instance.
    */
   onInbound(handler: (msg: InboundMessage, reply: ReplyHandle) => void): void
+
+  /**
+   * Optional file-sending capability.
+   *
+   * Not all channels support file uploads — this is opt-in.
+   * Channel adapters implement the platform-specific upload logic internally.
+   * Absence means the channel is text-only for outbound.
+   */
+  fileCapability?: ImFileCapability
+}
+
+// ============================================
+// ImFileCapability
+// ============================================
+
+/**
+ * Channel-agnostic file sending interface.
+ *
+ * Implemented by channel adapters that support outbound file delivery.
+ * The adapter handles all platform-specific upload logic (chunked WebSocket
+ * upload for WeCom, HTTP multipart for Feishu, etc.).
+ */
+export interface ImFileCapability {
+  /**
+   * Upload a local file and send it to the specified chat.
+   *
+   * @param chatId - Target platform-side conversation ID
+   * @param filePath - Absolute path to the local file
+   * @param chatType - Conversation type ('direct' | 'group')
+   * @param filename - Display filename (defaults to basename of filePath)
+   * @returns true if sent successfully, false on recoverable failure
+   */
+  sendFile(
+    chatId: string,
+    filePath: string,
+    chatType: 'direct' | 'group',
+    filename?: string
+  ): Promise<boolean>
 }
 
 // ============================================

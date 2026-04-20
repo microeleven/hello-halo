@@ -1,7 +1,7 @@
 /**
  * Input Area - Enhanced message input with bottom toolbar
  *
- * Layout (following industry standard - Qwen, ChatGPT, Baidu):
+ * Layout (following industry standard):
  * ┌──────────────────────────────────────────────────────┐
  * │ [Image previews]                                     │
  * │ ┌──────────────────────────────────────────────────┐ │

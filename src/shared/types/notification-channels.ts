@@ -50,13 +50,20 @@ export const NOTIFICATION_CHANNEL_META: Record<NotificationChannelType, {
 export interface EmailChannelConfig {
   enabled: boolean
   smtp: {
-    host: string         // e.g. "smtp.qq.com", "smtp.163.com"
+    host: string         // e.g. "smtp.example.com"
     port: number         // e.g. 465 (SSL), 587 (STARTTLS)
     secure: boolean      // true for SSL (port 465), false for STARTTLS
     user: string         // sender email address
-    password: string     // app password / authorization code (授权码)
+    password: string     // app password / authorization code
   }
   defaultTo: string      // default recipient email
+  /** CalDAV calendar URL template. Supports {host} and {email} placeholders.
+   *  Example: "https://{host}/dav/users/{email}/calendars/default/"
+   *  When omitted, calendar tools are disabled. */
+  caldavUrl?: string
+  /** TLS cipher suite override for IMAP/SMTP connections.
+   *  When omitted, Node.js default ciphers are used. */
+  tlsCiphers?: string
 }
 
 /** WeCom (企业微信) self-built app configuration */

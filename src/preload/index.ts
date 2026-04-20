@@ -354,12 +354,19 @@ export interface HaloAPI {
   imChannelsReconnect: (instanceId: string) => Promise<IpcResponse>
   imChannelsReload: () => Promise<IpcResponse>
   imChannelsProviders: () => Promise<IpcResponse>
+  imChannelsPermissionDefaults: () => Promise<IpcResponse>
 
   // IM Sessions (会话管理)
   imSessionsList: (appId?: string) => Promise<IpcResponse>
   imSessionsSetProactive: (input: { appId: string; channel: string; chatId: string; proactive: boolean }) => Promise<IpcResponse>
   imSessionsRemove: (input: { appId: string; channel: string; chatId: string }) => Promise<IpcResponse>
   imSessionsSetCustomName: (input: { appId: string; channel: string; chatId: string; name: string }) => Promise<IpcResponse>
+
+  // WeChat Personal Bot via iLink API
+  weixinIlinkRequestQrcode: () => Promise<IpcResponse<{ qrcode: string; qrcodeImgContent: string; baseUrl: string }>>
+  weixinIlinkPollAuthStatus: (qrcode: string) => Promise<IpcResponse<{ status: 'wait' | 'scaned' | 'confirmed' | 'expired'; botToken?: string; accountId?: string; baseUrl?: string; userId?: string }>>
+  weixinIlinkSaveToken: (instanceId: string, botToken: string, baseUrl?: string, accountId?: string) => Promise<IpcResponse>
+  weixinIlinkDisconnect: (instanceId: string) => Promise<IpcResponse>
 
   // Apps Management
   appList: (filter?: { spaceId?: string; status?: string; type?: string }) => Promise<IpcResponse>
@@ -375,6 +382,7 @@ export interface HaloAPI {
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
+  appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
   appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
@@ -427,6 +435,14 @@ export interface HaloAPI {
   storeToggleRegistry: (input: { registryId: string; enabled: boolean }) => Promise<IpcResponse>
   storeUpdateRegistryAdapterConfig: (input: { registryId: string; adapterConfig: Record<string, unknown> }) => Promise<IpcResponse>
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => () => void
+
+  // Model Capabilities
+  /** Resolve the final capability for a model (preset merged with user overrides) */
+  modelCapabilitiesResolve: (modelId: string, overrides?: Record<string, Record<string, unknown>>) => Promise<IpcResponse>
+  /** Get the raw preset for a model (no overrides applied), or null if not in preset */
+  modelCapabilitiesGetPreset: (modelId: string) => Promise<IpcResponse>
+  /** Get all preset model capabilities as a flat map */
+  modelCapabilitiesAll: () => Promise<IpcResponse>
 }
 
 interface IpcResponse<T = unknown> {
@@ -709,12 +725,19 @@ const api: HaloAPI = {
   imChannelsReconnect: (instanceId: string) => ipcRenderer.invoke('im-channels:reconnect', instanceId),
   imChannelsReload: () => ipcRenderer.invoke('im-channels:reload'),
   imChannelsProviders: () => ipcRenderer.invoke('im-channels:providers'),
+  imChannelsPermissionDefaults: () => ipcRenderer.invoke('im-channels:permission-defaults'),
 
   // IM Sessions (会话管理)
   imSessionsList: (appId) => ipcRenderer.invoke('im-sessions:list', appId),
   imSessionsSetProactive: (input) => ipcRenderer.invoke('im-sessions:set-proactive', input),
   imSessionsRemove: (input) => ipcRenderer.invoke('im-sessions:remove', input),
   imSessionsSetCustomName: (input) => ipcRenderer.invoke('im-sessions:set-custom-name', input),
+
+  // WeChat Personal Bot via iLink API
+  weixinIlinkRequestQrcode: () => ipcRenderer.invoke('weixin-ilink:request-qrcode'),
+  weixinIlinkPollAuthStatus: (qrcode) => ipcRenderer.invoke('weixin-ilink:poll-auth-status', qrcode),
+  weixinIlinkSaveToken: (instanceId, botToken, baseUrl?, accountId?) => ipcRenderer.invoke('weixin-ilink:save-token', instanceId, botToken, baseUrl, accountId),
+  weixinIlinkDisconnect: (instanceId) => ipcRenderer.invoke('weixin-ilink:disconnect', instanceId),
 
   // Apps Management
   appList: (filter) => ipcRenderer.invoke('app:list', filter),
@@ -730,6 +753,7 @@ const api: HaloAPI = {
   appGetActivity: (input) => ipcRenderer.invoke('app:get-activity', input),
   appGetSession: (input) => ipcRenderer.invoke('app:get-session', input),
   appRespondEscalation: (input) => ipcRenderer.invoke('app:respond-escalation', input),
+  appContinueRun: (input) => ipcRenderer.invoke('app:continue-run', input),
   appUpdateConfig: (input) => ipcRenderer.invoke('app:update-config', input),
   appUpdateFrequency: (input) => ipcRenderer.invoke('app:update-frequency', input),
   appUpdateOverrides: (input) => ipcRenderer.invoke('app:update-overrides', input),
@@ -794,6 +818,14 @@ const api: HaloAPI = {
 
   // Notification (in-app toast)
   onNotificationToast: (callback) => createEventListener('notification:toast', callback),
+
+  // Model Capabilities
+  modelCapabilitiesResolve: (modelId, overrides) =>
+    ipcRenderer.invoke('model-capabilities:resolve', modelId, overrides),
+  modelCapabilitiesGetPreset: (modelId) =>
+    ipcRenderer.invoke('model-capabilities:preset', modelId),
+  modelCapabilitiesAll: () =>
+    ipcRenderer.invoke('model-capabilities:all'),
 }
 
 contextBridge.exposeInMainWorld('halo', api)

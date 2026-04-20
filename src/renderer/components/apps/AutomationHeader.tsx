@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { Play, Pause, RotateCcw, Settings, Globe, ExternalLink, MessageSquare, Activity, Cog } from 'lucide-react'
+import { Play, Pause, RotateCcw, Globe, ExternalLink, MessageSquare, Activity, Cog, FolderOpen } from 'lucide-react'
 import Avatar from 'boring-avatars'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -18,8 +18,8 @@ import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { api } from '../../api'
+import { useSpaceStore } from '../../stores/space.store'
 import type { BrowserLoginEntry } from '../../../shared/apps/spec-types'
-import { getBrowserHomepage } from '../../utils/browser-homepage'
 
 // Brand-aligned palette for boring-avatars
 const AVATAR_COLORS = ['#84B9EF', '#6C8EBF', '#3D5A80', '#98C1D9', '#E0FBFC']
@@ -72,11 +72,6 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
     setShowBrowserPopover(false)
     api.openLoginWindow(url, label)
   }, [])
-
-  const handleOpenBlankBrowser = useCallback(() => {
-    setShowBrowserPopover(false)
-    getBrowserHomepage().then(url => api.openLoginWindow(url, t('Browser')))
-  }, [t])
 
   // Derive current tab from detailView
   const currentTab: AutomationTab = useMemo(() => {
@@ -176,11 +171,22 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
               {freqLabel && <span>{freqLabel}</span>}
             </span>
           </div>
-          {(nextRunLabel || lastRunLabel) && (
-            <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate">
+          {(nextRunLabel || lastRunLabel || (spaceName && app.spaceId)) && (
+            <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate flex items-center gap-0">
               {lastRunLabel && <span>{t('Last run')} {lastRunLabel}</span>}
               {lastRunLabel && nextRunLabel && <span className="mx-1">·</span>}
               {nextRunLabel && <span>{nextRunLabel}</span>}
+              {spaceName && app.spaceId && (lastRunLabel || nextRunLabel) && <span className="mx-1">·</span>}
+              {spaceName && app.spaceId && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); useSpaceStore.getState().openSpaceFolder(app.spaceId!) }}
+                  className="inline-flex items-center gap-0.5 hover:text-primary transition-colors group"
+                  title={t('Open space folder')}
+                >
+                  <FolderOpen className="w-3 h-3" />
+                  <span className="group-hover:underline decoration-dotted underline-offset-2">{t('Workspace')}: {spaceName}</span>
+                </button>
+              )}
             </p>
           )}
         </div>
@@ -234,22 +240,17 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
             {showBrowserButton && (
               <div ref={popoverRef} className="relative">
                 <button
-                  onClick={() => {
-                    if (hasBrowserLogin) {
-                      setShowBrowserPopover(prev => !prev)
-                    } else {
-                      handleOpenBlankBrowser()
-                    }
-                  }}
+                  onClick={() => setShowBrowserPopover(prev => !prev)}
                   title={t('Browser')}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
                 >
                   <Globe className="w-3.5 h-3.5" />
                 </button>
-                {showBrowserPopover && hasBrowserLogin && (
+                {showBrowserPopover && (
                   <BrowserLoginPopover
-                    entries={browser_login!}
+                    entries={browser_login ?? []}
                     onOpen={handleOpenBrowser}
+                    onOpenCustomUrl={(url) => handleOpenBrowser(url, t('Browser'))}
                     t={t}
                   />
                 )}
@@ -310,26 +311,64 @@ function formatTimeAgo(timestamp: number, t: (s: string, opts?: Record<string, u
 interface BrowserLoginPopoverProps {
   entries: BrowserLoginEntry[]
   onOpen: (url: string, label: string) => void
+  onOpenCustomUrl: (url: string) => void
   t: (s: string, opts?: Record<string, unknown>) => string
 }
 
-function BrowserLoginPopover({ entries, onOpen, t }: BrowserLoginPopoverProps) {
+function BrowserLoginPopover({ entries, onOpen, onOpenCustomUrl, t }: BrowserLoginPopoverProps) {
+  const [customUrl, setCustomUrl] = useState('')
+
+  const handleOpenCustom = () => {
+    const trimmed = customUrl.trim()
+    if (!trimmed) return
+    const url = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+    onOpenCustomUrl(url)
+    setCustomUrl('')
+  }
+
   return (
-    <div className="absolute right-0 top-full mt-1 z-50 min-w-[180px] max-w-[calc(100vw-2rem)] sm:max-w-[280px] bg-popover border border-border rounded-lg shadow-lg overflow-hidden">
+    <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] max-w-[calc(100vw-2rem)] sm:max-w-[300px] bg-popover border border-border rounded-lg shadow-lg overflow-hidden">
       <div className="px-3 py-2 border-b border-border">
         <span className="text-xs font-medium text-foreground">{t('Browser')}</span>
       </div>
-      <div className="py-1">
-        {entries.map(entry => (
+
+      {/* Preset login entries */}
+      {entries.length > 0 && (
+        <div className="py-1">
+          {entries.map(entry => (
+            <button
+              key={entry.url}
+              onClick={() => onOpen(entry.url, entry.label)}
+              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/60 transition-colors group"
+            >
+              <span className="text-sm text-foreground truncate">{entry.label}</span>
+              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Custom URL input */}
+      <div className={`px-3 py-2 ${entries.length > 0 ? 'border-t border-border' : ''}`}>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={customUrl}
+            onChange={(e) => setCustomUrl(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleOpenCustom() }}
+            placeholder={t('Enter URL')}
+            className="flex-1 min-w-0 bg-muted border border-border rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            autoFocus
+          />
           <button
-            key={entry.url}
-            onClick={() => onOpen(entry.url, entry.label)}
-            className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/60 transition-colors group"
+            onClick={handleOpenCustom}
+            disabled={!customUrl.trim()}
+            className="flex-shrink-0 p-1.5 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title={t('Open')}
           >
-            <span className="text-sm text-foreground truncate">{entry.label}</span>
-            <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+            <ExternalLink className="w-3.5 h-3.5" />
           </button>
-        ))}
+        </div>
       </div>
     </div>
   )

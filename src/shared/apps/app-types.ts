@@ -140,8 +140,10 @@ export interface ActivityEntryContent {
   error?: string
   /** Next retry time (for run_error) */
   nextRetryMs?: number
-  /** Structured output data (tables, lists) */
+  /** Structured output data (tables, lists, short inline markdown) */
   data?: unknown
+  /** Absolute path to a markdown file written by AI (replaces inline data for large content) */
+  dataPath?: string
   /** Question for the user (escalation only) */
   question?: string
   /** Preset choices for escalation */

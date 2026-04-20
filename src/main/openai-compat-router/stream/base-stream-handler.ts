@@ -9,6 +9,7 @@
 
 import { Readable } from 'node:stream'
 import type { Response as ExpressResponse } from 'express'
+import { jsonrepair } from 'jsonrepair'
 import { SSEWriter } from './sse-writer'
 import type { AnthropicStopReason, StreamToolCallState } from '../types'
 import { safeJsonParse } from '../utils'
@@ -155,12 +156,23 @@ export abstract class BaseStreamHandler {
         : ''
       if (tools.length > 0) {
         console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → tool_calls=[${tools.join(',')}]`)
+        // Log raw tool arguments for debugging malformed JSON from LLMs
+        for (const [idx, tc] of this.toolCallMap) {
+          console.log(`[LLM] tool[${idx}] ${tc.name} args (${tc.arguments.length} chars): ${tc.arguments}`)
+        }
       } else if (textPreview) {
         console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → text="${textPreview}"`)
       } else {
         console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → (empty)`)
       }
     }
+
+    // Repair malformed tool arguments before closing blocks.
+    // Some LLMs (e.g. GLM-5) produce incomplete JSON (missing closing braces)
+    // for tool call arguments. Inject a corrective input_json_delta event before
+    // content_block_stop so downstream consumers (CC SDK, stream-processor)
+    // receive valid JSON.
+    this.repairToolArguments()
 
     // Close any open block
     this.closeCurrentBlock()
@@ -213,6 +225,70 @@ export abstract class BaseStreamHandler {
     if (this.state.currentBlockIndex >= 0) {
       this.writer.writeBlockStop(this.state.currentBlockIndex)
       this.state.currentBlockIndex = -1
+    }
+  }
+
+  /**
+   * Validate accumulated tool arguments and repair malformed JSON.
+   *
+   * Some LLMs generate syntactically broken JSON for tool call arguments
+   * (e.g. missing closing braces for nested objects). This method runs
+   * after all streaming deltas have been received but BEFORE content_block_stop
+   * events are sent, so downstream consumers (CC SDK, stream-processor) see
+   * a corrective input_json_delta and can parse the result successfully.
+   *
+   * Safety constraints:
+   * - Only applies suffix-only repairs (appending missing brackets/braces).
+   *   If jsonrepair rewrites content in the middle, the fix is skipped because
+   *   the already-sent partial_json deltas cannot be retracted.
+   * - The repaired output is verified with JSON.parse before being sent.
+   * - Valid JSON is never touched (fast-path exit).
+   */
+  protected repairToolArguments(): void {
+    for (const [toolIndex, state] of this.toolCallMap) {
+      if (!state.arguments) continue
+
+      // Fast path: valid JSON, nothing to do
+      try {
+        JSON.parse(state.arguments)
+        continue
+      } catch {
+        // Fall through to repair
+      }
+
+      try {
+        const repaired = jsonrepair(state.arguments)
+        JSON.parse(repaired) // Verify repair produced valid JSON
+
+        // Only apply suffix-only repairs (appended missing brackets/braces).
+        // If jsonrepair modified content in the middle, the already-sent
+        // partial_json deltas cannot be retracted — log and skip.
+        if (!repaired.startsWith(state.arguments)) {
+          console.warn(
+            `[StreamHandler] Tool args for "${state.name}" need non-suffix repair, cannot fix in-stream. ` +
+            `Original (${state.arguments.length} chars): ${state.arguments}`
+          )
+          continue
+        }
+
+        const suffix = repaired.slice(state.arguments.length)
+        if (!suffix) continue
+
+        const blockIndex = this.toolIndexToBlock.get(toolIndex)
+        if (blockIndex === undefined) continue
+
+        console.warn(
+          `[StreamHandler] Repaired malformed tool args for "${state.name}": ` +
+          `appended "${suffix}" (${state.arguments.length} → ${repaired.length} chars)`
+        )
+        this.writer.writeInputJsonDelta(blockIndex, suffix)
+        state.arguments = repaired
+      } catch (e) {
+        console.warn(
+          `[StreamHandler] Cannot repair tool args for "${state.name}": ${(e as Error).message}. ` +
+          `Original (${state.arguments.length} chars): ${state.arguments}`
+        )
+      }
     }
   }
 

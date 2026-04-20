@@ -266,6 +266,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           // Go to home
           console.log('[Store] Config loaded, showing home')
           set({ view: 'home' })
+
+          // Silently refresh remote model lists in background (fire-and-forget).
+          // Ensures users see the latest available models without manual refresh,
+          // e.g. after provider adds new models or app is reinstalled.
+          api.refreshAISourcesConfig().then(result => {
+            if (result.success && result.data) {
+              const current = get().config
+              if (current) {
+                set({ config: { ...current, aiSources: (result.data as any).aiSources } })
+                console.log('[Store] Startup model refresh complete')
+              }
+            }
+          }).catch(() => {
+            // Network unavailable — acceptable, user can refresh manually
+          })
         }
       } else {
         console.error('[Store] Failed to load config:', response.error)

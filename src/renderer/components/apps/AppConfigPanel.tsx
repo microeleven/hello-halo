@@ -14,18 +14,21 @@
  */
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2 } from 'lucide-react'
+import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, Mail, HelpCircle } from 'lucide-react'
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
+import { useAppStore } from '../../stores/app.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import type { InputDef, SubscriptionDef, AppSpec } from '../../../shared/apps/spec-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { api } from '../../api'
+import { useSpaceStore } from '../../stores/space.store'
 import { AppModelSelector } from './AppModelSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { appTypeLabel } from './appTypeUtils'
+import { SystemPromptEditor } from './SystemPromptEditor'
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
 const CodeMirrorEditor = lazy(() =>
@@ -292,17 +295,51 @@ function FrequencyEditor({ subscription, subscriptionIndex, app, onFrequencyChan
 }
 
 // ============================================
+// InfoTip — small hover tooltip for label explanations
+// ============================================
+
+function InfoTip({ text }: { text: string }) {
+  const [show, setShow] = useState(false)
+  return (
+    <span
+      className="relative inline-flex items-center"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <HelpCircle className="w-3 h-3 text-muted-foreground/50 hover:text-muted-foreground cursor-default transition-colors" />
+      {show && (
+        <span className="absolute left-4 top-1/2 -translate-y-1/2 z-50 w-52 px-2.5 py-1.5 rounded-md bg-popover border border-border text-[11px] text-muted-foreground shadow-md leading-relaxed whitespace-normal">
+          {text}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// ============================================
 // Settings Tab Content
 // ============================================
 
 interface SettingsTabProps {
   app: InstalledApp
   appId: string
+  spaceName?: string
   t: (s: string, opts?: Record<string, unknown>) => string
 }
 
-function SettingsTab({ app, appId, t }: SettingsTabProps) {
+function SettingsTab({ app, appId, spaceName, t }: SettingsTabProps) {
   const { updateAppConfig, updateAppFrequency, updateAppSpec, updateAppOverrides, grantPermission, revokePermission } = useAppsStore()
+  const { setView } = useAppStore()
+
+  // Check if email notification channel is configured
+  const [emailConfigured, setEmailConfigured] = useState(false)
+  useEffect(() => {
+    api.getConfig().then((res: any) => {
+      if (res.success && res.data) {
+        setEmailConfigured(Boolean(res.data.notificationChannels?.email?.enabled))
+      }
+    }).catch(() => {})
+  }, [])
 
   // Type-narrowed helpers for automation-specific fields
   const isAutomation = app.spec.type === 'automation'
@@ -516,6 +553,68 @@ function SettingsTab({ app, appId, t }: SettingsTabProps) {
           </p>
         )}
 
+        {/* Email MCP toggle */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <Mail className={`w-3.5 h-3.5 ${emailConfigured ? 'text-muted-foreground' : 'text-muted-foreground/50'}`} />
+              <span className={`text-sm ${emailConfigured ? 'text-foreground' : 'text-muted-foreground'}`}>{t('Email')}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t('Allow this app to read, send, and manage emails and calendar')}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            disabled={!emailConfigured}
+            aria-checked={emailConfigured && resolvePermission(app, 'email', false)}
+            onClick={async () => {
+              if (!emailConfigured) return
+              const isEnabled = resolvePermission(app, 'email', false)
+              if (isEnabled) {
+                await revokePermission(appId, 'email')
+              } else {
+                await grantPermission(appId, 'email')
+              }
+            }}
+            className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full transition-colors ${
+              !emailConfigured
+                ? 'bg-muted/50 cursor-not-allowed'
+                : resolvePermission(app, 'email', false) ? 'bg-primary' : 'bg-muted'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow transform transition-transform mt-0.5 ${
+                emailConfigured && resolvePermission(app, 'email', false) ? 'translate-x-[18px]' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
+        {/* Not configured: show hint with link to settings */}
+        {!emailConfigured && (
+          <button
+            onClick={() => {
+              setView('settings')
+              setTimeout(() => {
+                const el = document.getElementById('message-channels')
+                el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }, 100)
+            }}
+            className="text-xs text-amber-500 flex items-center gap-1 -mt-2 hover:text-amber-400 transition-colors"
+          >
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+            {t('Email not configured. Go to Settings > Notification Channels to set up.')}
+          </button>
+        )}
+        {/* Warn when user disabled a permission the spec declares */}
+        {emailConfigured && !resolvePermission(app, 'email', false) && app.spec.permissions?.includes('email') && (
+          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+            {t('This app may require Email to work properly')}
+          </p>
+        )}
+
         {/* Browser login sites */}
         {browserLoginEntries.length > 0 && (
           <div className="space-y-2">
@@ -682,12 +781,11 @@ function SettingsTab({ app, appId, t }: SettingsTabProps) {
           {/* System Prompt */}
           <div className="space-y-1.5">
             <label className="text-sm text-foreground">{t('System Prompt')}</label>
-            <textarea
+            <SystemPromptEditor
               value={specSystemPrompt}
-              onChange={e => { setSpecSystemPrompt(e.target.value); setSpecSaveSuccess(false); setSpecError(null) }}
-              rows={6}
-              spellCheck={false}
-              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono"
+              onChange={v => { setSpecSystemPrompt(v); setSpecSaveSuccess(false); setSpecError(null) }}
+              onDone={() => { if (specHasChanges) void handleSpecSave() }}
+              fontMono
             />
           </div>
 
@@ -748,8 +846,26 @@ function SettingsTab({ app, appId, t }: SettingsTabProps) {
                 </span>
               </div>
             )}
+            {app.spaceId && spaceName && (
+              <div className="flex gap-2 items-center">
+                <span className="text-muted-foreground w-20 flex-shrink-0 flex items-center gap-1">
+                  {t('Workspace')}
+                  <InfoTip text={t('The workspace folder where the digital human saves code files, task outputs, and work artifacts.')} />
+                </span>
+                <button
+                  onClick={() => useSpaceStore.getState().openSpaceFolder(app.spaceId!)}
+                  className="text-foreground hover:text-primary transition-colors flex items-center gap-1 group"
+                >
+                  <FolderOpen className="w-3 h-3 text-muted-foreground group-hover:text-primary transition-colors" />
+                  <span className="underline decoration-dotted underline-offset-2">{spaceName}</span>
+                </button>
+              </div>
+            )}
             <div className="flex gap-2 items-start">
-              <span className="text-muted-foreground w-20 flex-shrink-0 pt-px">{t('Data')}</span>
+              <span className="text-muted-foreground w-20 flex-shrink-0 pt-px flex items-center gap-1">
+                {t('Memory Files')}
+                <InfoTip text={t('Internal runtime state (memory.md and run history). Separate from workspace files and not affected by space operations.')} />
+              </span>
               <div className="min-w-0 flex-1">
                 {dataPath && (
                   <p className="text-foreground/60 truncate text-[11px] leading-relaxed select-all" title={dataPath}>
@@ -989,7 +1105,7 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
 
       {/* Tab content */}
       {activeTab === 'settings' && (
-        <SettingsTab app={app} appId={appId} t={t} />
+        <SettingsTab app={app} appId={appId} spaceName={spaceName} t={t} />
       )}
       {activeTab === 'yaml' && (
         <YamlTab app={app} appId={appId} t={t} />
@@ -1067,22 +1183,27 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
             </div>
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setShowClearMemoryConfirm(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-orange-400 hover:text-orange-300 border border-orange-400/30 hover:border-orange-400/60 rounded-lg transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              {t('Clear Memory')}
-            </button>
-            <button
-              onClick={() => setShowUninstallConfirm(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
-            >
-              <Unplug className="w-4 h-4" />
-              {t('Uninstall')}
-            </button>
-          </div>
+          <>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setShowClearMemoryConfirm(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-orange-400 hover:text-orange-300 border border-orange-400/30 hover:border-orange-400/60 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                {t('Clear Memory')}
+              </button>
+              <button
+                onClick={() => setShowUninstallConfirm(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
+              >
+                <Unplug className="w-4 h-4" />
+                {t('Uninstall')}
+              </button>
+            </div>
+            <p className="text-[11px] text-muted-foreground/60 mt-1">
+              {t('Memory is the internal runtime state (memory.md and run history). Clearing it does not affect files in the space.')}
+            </p>
+          </>
         )}
       </div>
     </div>

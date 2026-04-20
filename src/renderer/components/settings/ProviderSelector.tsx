@@ -28,6 +28,8 @@ import {
 } from '../../types'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
+import { ModelConfigPanel } from './ModelConfigPanel'
+import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 
 interface ProviderSelectorProps {
   aiSources: AISourcesConfig
@@ -82,6 +84,11 @@ export function ProviderSelector({
   )
   const [modelSearchQuery, setModelSearchQuery] = useState('')
   const [showModelDropdown, setShowModelDropdown] = useState(false)
+
+  // Per-model capability overrides for this source
+  const [modelOverrides, setModelOverrides] = useState<Record<string, ModelCapabilityOverride>>(
+    editingSource?.modelOverrides ?? {}
+  )
 
   // Get current provider config
   const currentProvider = useMemo(() =>
@@ -248,7 +255,9 @@ export function ProviderSelector({
         model: finalModel,
         availableModels,
         createdAt: editingSource?.createdAt || now,
-        updatedAt: now
+        updatedAt: now,
+        // Only persist modelOverrides if there's at least one entry
+        ...(Object.keys(modelOverrides).length > 0 ? { modelOverrides } : {})
       }
 
       await onSave(source)
@@ -622,6 +631,15 @@ export function ProviderSelector({
               </div>
             )}
           </div>
+
+          {/* Model Configuration — context window, output tokens, vision, thinking */}
+          {selectedModel && (
+            <ModelConfigPanel
+              modelId={selectedModel}
+              overrides={modelOverrides}
+              onChange={setModelOverrides}
+            />
+          )}
 
           {/* Notes */}
           {currentProvider.notes && (
