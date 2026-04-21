@@ -71,6 +71,18 @@ export interface ExecuteRunOptions {
   existingRunId?: string
   /** Existing session key matching the run record (required when existingRunId is set). */
   existingSessionKey?: string
+  /**
+   * Fired exactly once, after the run record is inserted/reopened and before
+   * the AI session is built. Used by the runtime service to dispatch the
+   * `onRunStarted` lifecycle event with the authoritative runId. Errors in
+   * the callback are swallowed by the caller — must never throw.
+   */
+  onRunStarted?: (info: {
+    runId: string
+    sessionKey: string
+    startedAt: number
+    isResuming: boolean
+  }) => void
 }
 
 /** Internal result from stream processing */
@@ -149,7 +161,7 @@ const SESSION_KEY_PREFIX = 'app-run'
  * @throws RunExecutionError on unrecoverable failure
  */
 export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResult> {
-  const { app, trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey } = options
+  const { app, trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey, onRunStarted } = options
 
   // Guard: executeRun is only valid for automation apps.
   // This narrows app.spec to AutomationSpec for the rest of the function.
@@ -184,6 +196,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       triggerData: trigger.eventPayload ?? (trigger.escalation ? { escalation: trigger.escalation } : undefined),
       startedAt,
     })
+  }
+
+  // Emit run-started lifecycle hook. Fires after the DB row exists and before
+  // the AI session is built, so subscribers see "running" runs in real time.
+  // Callback errors are isolated in the caller — this site never throws.
+  if (onRunStarted) {
+    try {
+      onRunStarted({ runId, sessionKey, startedAt, isResuming })
+    } catch (err) {
+      console.warn(`[Runtime][${runTag}] onRunStarted callback threw:`, err)
+    }
   }
 
   // Track escalation from report_to_user callback

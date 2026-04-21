@@ -193,6 +193,46 @@ export interface ActivationState {
 }
 
 // ============================================
+// Run Lifecycle Events
+// ============================================
+
+/**
+ * Fired when a run enters the executing phase: after concurrency admission
+ * and after the `automation_runs` row has been inserted/reopened, but BEFORE
+ * the AI session is built. Subscribers can rely on (a) `runId` existing in
+ * the DB by the time the event is delivered and (b) this event always
+ * preceding any `RunFinishedEvent` for the same runId.
+ */
+export interface RunStartedEvent {
+  appId: string
+  runId: string
+  sessionKey: string
+  triggerType: TriggerType
+  startedAt: number
+}
+
+/** Fired when a run leaves the executing phase (ok / error / skipped). */
+export interface RunFinishedEvent {
+  appId: string
+  runId: string
+  sessionKey: string
+  triggerType: TriggerType
+  outcome: RunOutcome
+  /** Maps to the DB `automation_runs.status` column at the moment of emit. */
+  status: 'ok' | 'error' | 'skipped'
+  startedAt: number
+  finishedAt: number
+  durationMs: number
+  errorMessage?: string
+}
+
+export type RunStartedHandler = (evt: RunStartedEvent) => void
+export type RunFinishedHandler = (evt: RunFinishedEvent) => void
+
+/** Unsubscribe for runtime lifecycle handlers. */
+export type RuntimeUnsubscribe = () => void
+
+// ============================================
 // Service Dependencies
 // ============================================
 
@@ -307,4 +347,20 @@ export interface AppRuntimeService {
 
   /** Deactivate all Apps. Called at shutdown. */
   deactivateAll(): Promise<void>
+
+  // ── Lifecycle Events ────────────────────────
+
+  /**
+   * Register a listener for run-started events. Fired once per run after it
+   * passes concurrency admission and before the AI is invoked.
+   * Handler exceptions are swallowed — business flow is never affected.
+   */
+  onRunStarted(handler: RunStartedHandler): RuntimeUnsubscribe
+
+  /**
+   * Register a listener for run-finished events. Fired once per run after
+   * its DB record has been finalized (ok / error / skipped).
+   * Handler exceptions are swallowed — business flow is never affected.
+   */
+  onRunFinished(handler: RunFinishedHandler): RuntimeUnsubscribe
 }

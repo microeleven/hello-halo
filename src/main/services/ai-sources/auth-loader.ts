@@ -194,6 +194,22 @@ export interface ProductConfig {
    * Open-source builds omit this (no restrictions by default).
    */
   imChannels?: ImChannelsProductConfig
+
+  /**
+   * Identity source for telemetry (optional).
+   *
+   * A dot-path describing where to read the externally-meaningful user ID
+   * (e.g. an enterprise SSO UID) from the current AI source. The path is
+   * resolved against the active entry in `aiSources.sources[]`. Example
+   * values:
+   *   - "user.uid"     — enterprise OAuth UID (default for SSO providers)
+   *   - "user.email"   — fall back to email when UID is unavailable
+   *
+   * When omitted, telemetry falls back to the anonymous per-install UUID
+   * generated on first launch. Safe to set in open-source builds — it has
+   * no effect unless the telemetry provider is also configured.
+   */
+  identitySource?: string
 }
 
 /**
@@ -287,6 +303,15 @@ export function getServiceDefaults(): ServiceDefaults | undefined {
  */
 export function getImChannelsPermissionDefaults(): ImChannelsPermissionDefaults | undefined {
   return loadProductConfig().imChannels?.permissionControl
+}
+
+/**
+ * Get the identity source dot-path from product.json.
+ * Returns undefined when not configured — telemetry should fall back to
+ * the anonymous per-install UUID.
+ */
+export function getIdentitySource(): string | undefined {
+  return loadProductConfig().identitySource
 }
 
 /**

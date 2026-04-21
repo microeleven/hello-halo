@@ -24,6 +24,8 @@ import type {
   RunOutcome,
   AppListFilter,
   StatusChangeHandler,
+  AppInstalledHandler,
+  AppUninstalledHandler,
   Unsubscribe,
   UninstallOptions,
 } from './types'
@@ -144,6 +146,12 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
   // Status change event listeners
   const statusChangeHandlers: StatusChangeHandler[] = []
+  // Install / uninstall event listeners (used by analytics subscribers).
+  // Separate from status-change because the install path transitions from
+  // undefined → active (no prior status) and therefore does not fire the
+  // status-change listeners.
+  const appInstalledHandlers: AppInstalledHandler[] = []
+  const appUninstalledHandlers: AppUninstalledHandler[] = []
 
   /**
    * Notify all registered status change handlers.
@@ -155,6 +163,28 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         handler(appId, oldStatus, newStatus)
       } catch (error) {
         console.error('[AppManager] Status change handler error:', error)
+      }
+    }
+  }
+
+  /** Fire app-installed handlers. Errors are isolated per subscriber. */
+  function notifyInstalled(app: InstalledApp): void {
+    for (const handler of appInstalledHandlers) {
+      try {
+        handler(app)
+      } catch (error) {
+        console.error('[AppManager] Install handler error:', error)
+      }
+    }
+  }
+
+  /** Fire app-uninstalled handlers. Errors are isolated per subscriber. */
+  function notifyUninstalled(app: InstalledApp): void {
+    for (const handler of appUninstalledHandlers) {
+      try {
+        handler(app)
+      } catch (error) {
+        console.error('[AppManager] Uninstall handler error:', error)
       }
     }
   }
@@ -274,6 +304,12 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           console.log(
             `[AppManager] Reinstalled previously uninstalled app '${spec.name}' (${existing.id})`
           )
+          // Re-emit install event: from analytics' perspective a reinstall is
+          // a fresh install (the app re-enters the active population).
+          const reinstalled = store.getById(existing.id)
+          if (reinstalled) {
+            notifyInstalled(reinstalled)
+          }
           return existing.id
         }
         throw new AppAlreadyInstalledError(specId, spaceId)
@@ -337,6 +373,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         emitMcpChange(spaceId)
       }
 
+      // Fire install event for analytics / external subscribers.
+      // Handlers run in try/catch so business flow is unaffected.
+      notifyInstalled(app)
+
       return appId
     },
 
@@ -393,6 +433,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       console.log(
         `[AppManager] Soft-deleted app ${appId} (was: ${oldStatus})`
       )
+
+      // Fire uninstall event. `app` was captured by requireApp() before the
+      // status transition so subscribers receive the original spec metadata.
+      notifyUninstalled(app)
     },
 
     reinstall(appId: string): void {
@@ -806,6 +850,26 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         const index = statusChangeHandlers.indexOf(handler)
         if (index > -1) {
           statusChangeHandlers.splice(index, 1)
+        }
+      }
+    },
+
+    onAppInstalled(handler: AppInstalledHandler): Unsubscribe {
+      appInstalledHandlers.push(handler)
+      return () => {
+        const index = appInstalledHandlers.indexOf(handler)
+        if (index > -1) {
+          appInstalledHandlers.splice(index, 1)
+        }
+      }
+    },
+
+    onAppUninstalled(handler: AppUninstalledHandler): Unsubscribe {
+      appUninstalledHandlers.push(handler)
+      return () => {
+        const index = appUninstalledHandlers.indexOf(handler)
+        if (index > -1) {
+          appUninstalledHandlers.splice(index, 1)
         }
       }
     },

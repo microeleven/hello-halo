@@ -38,6 +38,7 @@ import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/m
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
 import { readSessionMessages } from '../../apps/runtime/session-store'
 import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
+import { analytics } from '../../services/analytics/analytics.service'
 import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
 import type { AppErrorCode } from '../../controllers/app.controller'
@@ -2085,6 +2086,29 @@ export function registerApiRoutes(app: Express): void {
         success: true,
         data: modelCapabilitiesService.getAllPresets()
       })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== Analytics =====
+  // POST /api/analytics/report — fire-and-forget telemetry from remote/Capacitor clients
+  app.post('/api/analytics/report', (req: Request, res: Response) => {
+    try {
+      const { event, properties } = req.body as {
+        event?: string
+        properties?: Record<string, unknown>
+      }
+
+      if (!event || typeof event !== 'string') {
+        res.status(400).json({ success: false, error: 'Missing event name' })
+        return
+      }
+
+      // Delegate to the same analytics pipeline the IPC handler uses
+      void analytics.track(event, properties ?? {})
+
+      res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

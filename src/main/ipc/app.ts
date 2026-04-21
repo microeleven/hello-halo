@@ -56,6 +56,8 @@ import { readSessionMessages } from '../apps/runtime/session-store'
 import { getSpace } from '../services/space.service'
 import { broadcastToAll } from '../http/websocket'
 import * as appController from '../controllers/app.controller'
+import { analytics } from '../services/analytics/analytics.service'
+import { AnalyticsEvents } from '../services/analytics/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -546,6 +548,12 @@ export function registerAppHandlers(): void {
     'app:chat-send',
     async (_event, request: AppChatRequest) => {
       try {
+        // Telemetry: count user-sent messages to app chat (no content)
+        void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
+          source: 'app-chat',
+          appId: request.appId,
+        })
+
         // Fire-and-forget: streaming events are pushed to renderer via agent:* channels.
         // We don't await the full completion here because the renderer listens for
         // real-time events (agent:message, agent:thought, etc.) keyed by conversationId.

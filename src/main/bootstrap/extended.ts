@@ -45,7 +45,11 @@ import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { initMemory } from '../platform/memory'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
 import { initAppRuntime, shutdownAppRuntime } from '../apps/runtime'
+import { installAppsSubscribers } from '../services/analytics/subscribers/apps.subscriber'
+import { runStartupSnapshot } from '../services/analytics/snapshot'
+import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
+import { registerAnalyticsHandlers } from '../ipc/analytics'
 import { registerNotificationChannelHandlers } from '../ipc/notification-channels'
 import { registerWecomBotHandlers } from '../ipc/wecom-bot'
 import { registerImChannelHandlers } from '../ipc/im-channels'
@@ -106,7 +110,14 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Phase 3: App Runtime ─────────────────────────────────────────────────
   // initAppRuntime creates the EventRouter internally, wires source adapters
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.
-  await initAppRuntime({ db, appManager, scheduler, memory, background })
+  const runtime = await initAppRuntime({ db, appManager, scheduler, memory, background })
+
+  // ── Phase 3.5: Analytics subscribers ────────────────────────────────────
+  // Wire lifecycle events (install/uninstall/run) into the analytics pipeline.
+  // Must come after both appManager and runtime are ready.
+  installAppsSubscribers(appManager, runtime)
+  // Fire-and-forget startup snapshot (no await — never blocks bootstrap).
+  void runStartupSnapshot(appManager, runtime)
 
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────
   initRegistryService({ db })
@@ -177,6 +188,9 @@ export function initializeExtendedServices(): void {
   // and access a shared hidden BrowserWindow with stealth injection
   const backgroundService = initBackground()
   backgroundService.initTray()
+
+  // Analytics: fire-and-forget IPC channel for renderer telemetry
+  registerAnalyticsHandlers()
 
   // App management IPC handlers (app:install, app:list, etc.)
   registerAppHandlers()
@@ -258,9 +272,17 @@ export async function cleanupExtendedServices(): Promise<void> {
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()
 
-  // Apps: Shutdown runtime first (deactivates all apps, stops event router, cancels runs)
+  // Apps: Shutdown runtime first (deactivates all apps, stops event router, cancels runs).
+  // This is intentionally ahead of `analytics.destroy()` so that any final
+  // `RunFinishedEvent`s fired during deactivation are still delivered to the
+  // analytics pipeline and buffered by the telemetry provider.
   await shutdownAppRuntime().catch(err => console.error('[Bootstrap] AppRuntime shutdown error:', err))
   await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
+
+  // Analytics: Flush pending events (including anything buffered from the
+  // runtime shutdown above). The provider applies its own bounded flush
+  // timeout so we never hang here.
+  await analytics.destroy().catch(err => console.error('[Bootstrap] Analytics shutdown error:', err))
 
   // Platform: Shutdown scheduler (stop timers)
   await shutdownScheduler().catch(err => console.error('[Bootstrap] Scheduler shutdown error:', err))
