@@ -131,6 +131,8 @@ export interface ImChannelsPermissionDefaults {
   defaultGuestPolicy?: {
     allowedTools?: string[]
   }
+  /** Placeholder hint for the Owner User IDs input (enterprise-customizable) */
+  ownerIdHint?: string
 }
 
 /**

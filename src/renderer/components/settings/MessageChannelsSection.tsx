@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
-  Plus, Trash2, MoreVertical, Smartphone,
+  Plus, Trash2, MoreVertical, Smartphone, AlertTriangle,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
@@ -39,6 +39,7 @@ interface PermissionDefaults {
   defaultEnabled?: boolean
   defaultGuestAccess?: boolean
   defaultGuestPolicy?: { allowedTools?: string[] }
+  ownerIdHint?: string
 }
 
 // ============================================
@@ -321,6 +322,8 @@ interface InstanceCardProps {
   onReconnect: () => void
   /** Warning message when this instance's Bot ID conflicts with another instance */
   duplicateWarning?: string
+  /** Product-level permission defaults */
+  permissionDefaults?: PermissionDefaults | null
 }
 
 function InstanceCard({
@@ -333,6 +336,7 @@ function InstanceCard({
   onDelete,
   onReconnect,
   duplicateWarning,
+  permissionDefaults,
 }: InstanceCardProps) {
   const { t } = useTranslation()
   const isConnected = status?.connected ?? false
@@ -665,7 +669,7 @@ function InstanceCard({
           </div>
 
           {/* ── Permission Control ── */}
-          <PermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} />
+          <PermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
 
           {/* Connection status */}
           {isEnabled && (
@@ -728,9 +732,11 @@ interface PermissionSectionProps {
   onChange: (instance: ImChannelInstanceConfig) => void
   /** Debounced save (for text fields — 500ms delay, same as config fields) */
   onDebouncedChange: (instance: ImChannelInstanceConfig) => void
+  /** Product-level permission defaults (for owner ID hint, etc.) */
+  permissionDefaults?: PermissionDefaults | null
 }
 
-function PermissionSection({ instance, onChange, onDebouncedChange }: PermissionSectionProps) {
+function PermissionSection({ instance, onChange, onDebouncedChange, permissionDefaults }: PermissionSectionProps) {
   const { t } = useTranslation()
   const permissionEnabled = instance.permissionEnabled ?? false
   const owners = instance.owners ?? []
@@ -851,7 +857,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange }: Permission
               value={ownersDisplay}
               onChange={(e) => handleOwnersChange(e.target.value)}
               onBlur={handleOwnersBlur}
-              placeholder={t('e.g. zhangsan, lisi (comma separated)')}
+              placeholder={permissionDefaults?.ownerIdHint || t('e.g. zhangsan, lisi (comma separated)')}
               rows={2}
               className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
@@ -859,6 +865,16 @@ function PermissionSection({ instance, onChange, onDebouncedChange }: Permission
               {t('Owners have full access. Others are guests.')}
             </p>
           </div>
+
+          {/* Warning: no owners set */}
+          {!hasOwners && (
+            <div className="flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 px-3 py-2">
+              <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
+              <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                {t('No Owner IDs set. All users are treated as guests and cannot use any tools — chat only.')}
+              </p>
+            </div>
+          )}
 
           {/* Guest access toggle (only when owners are set) */}
           {hasOwners && (
@@ -1516,6 +1532,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
                   duplicateWarning={getDuplicateWarning(inst, instances)}
+                  permissionDefaults={permissionDefaults}
                 />
               ))}
 
