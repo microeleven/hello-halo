@@ -7,12 +7,13 @@
  */
 
 import { useState } from 'react'
-import { Loader2, MessageSquare, CheckCircle2 } from 'lucide-react'
+import { Loader2, MessageSquare, CheckCircle2, FileText, FolderOpen } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
 import { useDataContent } from '../../hooks/useDataContent'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
+import { api } from '../../api'
 
 interface EscalationCardProps {
   entry: ActivityEntry
@@ -57,7 +58,28 @@ export function EscalationCard({ entry, appId }: EscalationCardProps) {
             </p>
           </div>
         </div>
-        {data && <MarkdownRenderer content={data} className="text-sm" />}
+        {entry.content.dataPath ? (
+          <div className="rounded-md border border-border overflow-hidden">
+            <button
+              onClick={() => api.showArtifactInFolder(entry.content.dataPath!)}
+              title={entry.content.dataPath}
+              className="w-full flex items-center gap-1.5 px-2.5 py-1.5
+                bg-secondary/60 hover:bg-secondary text-muted-foreground
+                text-[11px] font-mono transition-colors group border-b border-border"
+            >
+              <FileText className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{entry.content.dataPath.split('/').pop()}</span>
+              <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+            {data && (
+              <div className="p-3">
+                <MarkdownRenderer content={data} className="text-sm" />
+              </div>
+            )}
+          </div>
+        ) : data ? (
+          <MarkdownRenderer content={data} className="text-sm" />
+        ) : null}
       </div>
     )
   }
@@ -71,7 +93,28 @@ export function EscalationCard({ entry, appId }: EscalationCardProps) {
       </div>
 
       {/* Detailed context data */}
-      {data && <MarkdownRenderer content={data} className="text-sm" />}
+      {entry.content.dataPath ? (
+        <div className="rounded-md border border-border overflow-hidden">
+          <button
+            onClick={() => api.showArtifactInFolder(entry.content.dataPath!)}
+            title={entry.content.dataPath}
+            className="w-full flex items-center gap-1.5 px-2.5 py-1.5
+              bg-secondary/60 hover:bg-secondary text-muted-foreground
+              text-[11px] font-mono transition-colors group border-b border-border"
+          >
+            <FileText className="w-3 h-3 flex-shrink-0" />
+            <span className="truncate">{entry.content.dataPath.split('/').pop()}</span>
+            <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+          </button>
+          {data && (
+            <div className="p-3">
+              <MarkdownRenderer content={data} className="text-sm" />
+            </div>
+          )}
+        </div>
+      ) : data ? (
+        <MarkdownRenderer content={data} className="text-sm" />
+      ) : null}
 
       {/* Preset choices */}
       {choices.length > 0 && !showTextInput && (

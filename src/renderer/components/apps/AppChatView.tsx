@@ -194,13 +194,32 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
   }, [appId, spaceId, conversationId, resetSession, t])
 
   // ── Stop generation ──
+  // Must eagerly clear frontend session state (isGenerating/isThinking) in addition
+  // to sending the backend stop IPC. Without this, the UI stays stuck in "thinking"
+  // because agent:complete may arrive late (backend drain) or not at all (drain race).
+  // This mirrors the pattern in chat.store.ts stopGeneration() for space conversations.
   const handleStop = useCallback(async () => {
     try {
       await api.appChatStop(appId)
+      useChatStore.setState((state) => {
+        const newSessions = new Map(state.sessions)
+        const session = newSessions.get(conversationId)
+        if (session) {
+          newSessions.set(conversationId, {
+            ...session,
+            isGenerating: false,
+            isThinking: false,
+            pendingQuestion: session.pendingQuestion?.status === 'active'
+              ? { ...session.pendingQuestion, status: 'cancelled' as const }
+              : session.pendingQuestion
+          })
+        }
+        return { sessions: newSessions }
+      })
     } catch (err) {
       console.error('[AppChatView] Stop error:', err)
     }
-  }, [appId])
+  }, [appId, conversationId])
 
   // ── Answer question from AskUserQuestionCard ──
   const handleAnswerQuestion = useCallback((answers: Record<string, string>) => {

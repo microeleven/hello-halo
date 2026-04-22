@@ -80,19 +80,17 @@ export async function stopGeneration(conversationId?: string): Promise<void> {
           }
           closeV2Session(conversationId)
         } else {
-          // Normal mode: interrupt current turn and drain stale messages
+          // Normal mode: interrupt current turn.
+          // Do NOT drain here — processStream() is already consuming the same
+          // v2Session.session.stream() iterator and will drain stale messages
+          // after detecting abortController.signal.aborted. Draining here would
+          // race with processStream, causing one side to hang waiting for a
+          // 'result' message that the other side already consumed.
           try {
             await (v2Session.session as any).interrupt()
-            console.log(`[Agent] V2 session interrupted, draining stale messages...`)
-
-            // Drain stale messages until we hit the result
-            for await (const msg of v2Session.session.stream()) {
-              console.log(`[Agent] Drained: ${msg.type}`)
-              if (msg.type === 'result') break
-            }
-            console.log(`[Agent] Drain complete for: ${conversationId}`)
+            console.log(`[Agent] V2 session interrupted (processStream handles drain)`)
           } catch (e) {
-            console.error(`[Agent] Failed to interrupt/drain V2 session:`, e)
+            console.error(`[Agent] Failed to interrupt V2 session:`, e)
           }
         }
       }
