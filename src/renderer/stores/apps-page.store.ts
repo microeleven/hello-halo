@@ -12,6 +12,7 @@
  */
 
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { getCurrentLanguage } from '../i18n'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
@@ -39,6 +40,9 @@ export type AppsDetailView =
 
 export type AppsPageTab = 'my-digital-humans' | 'my-apps' | 'store'
 
+/** Which detail tab was last selected for automation apps (persisted to localStorage) */
+export type AutomationDetailTab = 'activity' | 'chat' | 'config'
+
 // ============================================
 // State Interface
 // ============================================
@@ -52,6 +56,8 @@ interface AppsPageState {
 
   // ── Tab State ──────────────────────────────
   currentTab: AppsPageTab
+  /** Remembers which automation detail tab the user last selected (persisted) */
+  lastAutomationTab: AutomationDetailTab
 
   // ── Store Tab State ────────────────────────
   storeApps: RegistryEntry[]
@@ -77,7 +83,7 @@ interface AppsPageState {
   imSessionsAppId: string | null
 
   // Actions
-  selectApp: (appId: string, appType?: string) => void
+  selectApp: (appId: string, appType?: string, spaceId?: string) => void
   clearSelection: () => void
   openActivityThread: (appId: string) => void
   openSessionDetail: (appId: string, runId: string, sessionKey: string) => void
@@ -109,7 +115,9 @@ interface AppsPageState {
 // Store
 // ============================================
 
-export const useAppsPageStore = create<AppsPageState>((set, get) => ({
+export const useAppsPageStore = create<AppsPageState>()(
+  persist(
+    (set, get) => ({
   selectedAppId: null,
   detailView: null,
   initialAppId: null,
@@ -117,6 +125,7 @@ export const useAppsPageStore = create<AppsPageState>((set, get) => ({
 
   // ── Tab State ──────────────────────────────
   currentTab: 'my-digital-humans',
+  lastAutomationTab: 'activity',
 
   // ── Store Tab State ────────────────────────
   storeApps: [],
@@ -141,27 +150,34 @@ export const useAppsPageStore = create<AppsPageState>((set, get) => ({
   imSessions: [],
   imSessionsAppId: null,
 
-  selectApp: (appId, appType) => {
+  selectApp: (appId, appType, spaceId) => {
     let detailView: AppsDetailView = { type: 'activity-thread', appId }
     if (appType === 'mcp') detailView = { type: 'mcp-status', appId }
-    if (appType === 'skill') detailView = { type: 'skill-info', appId }
-    if (appType === 'uninstalled') detailView = { type: 'uninstalled-detail', appId }
+    else if (appType === 'skill') detailView = { type: 'skill-info', appId }
+    else if (appType === 'uninstalled') detailView = { type: 'uninstalled-detail', appId }
+    else {
+      // Automation apps: restore last selected tab
+      const tab = get().lastAutomationTab
+      if (tab === 'chat' && spaceId) detailView = { type: 'app-chat', appId, spaceId }
+      else if (tab === 'config') detailView = { type: 'app-config', appId }
+      // else default 'activity' → activity-thread (already set)
+    }
     set({ selectedAppId: appId, detailView })
   },
 
   clearSelection: () => set({ selectedAppId: null, detailView: null }),
 
   openActivityThread: (appId) =>
-    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId } }),
+    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId }, lastAutomationTab: 'activity' }),
 
   openSessionDetail: (appId, runId, sessionKey) =>
     set({ selectedAppId: appId, detailView: { type: 'session-detail', appId, runId, sessionKey } }),
 
   openAppChat: (appId, spaceId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-chat', appId, spaceId } }),
+    set({ selectedAppId: appId, detailView: { type: 'app-chat', appId, spaceId }, lastAutomationTab: 'chat' }),
 
   openAppConfig: (appId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-config', appId } }),
+    set({ selectedAppId: appId, detailView: { type: 'app-config', appId }, lastAutomationTab: 'config' }),
 
   setInitialAppId: (appId) => set({ initialAppId: appId }),
 
@@ -415,4 +431,13 @@ export const useAppsPageStore = create<AppsPageState>((set, get) => ({
       console.error('[AppsPageStore] checkUpdates error:', err)
     }
   },
-}))
+}),
+    {
+      name: 'halo-apps-page',
+      // Only persist the user's last automation tab preference
+      partialize: (state) => ({
+        lastAutomationTab: state.lastAutomationTab,
+      }),
+    }
+  )
+)

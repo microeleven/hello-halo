@@ -154,7 +154,7 @@ export function AppList({ onInstall, onManualAdd, spaceMap, mode = 'automation' 
                     if (app.status === 'uninstalled') {
                       selectApp(app.id, 'uninstalled')
                     } else {
-                      selectApp(app.id, app.spec.type)
+                      selectApp(app.id, app.spec.type, app.spaceId ?? undefined)
                     }
                   }}
                 />
