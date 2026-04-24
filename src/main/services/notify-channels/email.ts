@@ -38,6 +38,10 @@ export async function sendEmail(
         user: config.smtp.user,
         pass: config.smtp.password,
       },
+      tls: {
+        rejectUnauthorized: false,
+        ...(config.tlsCiphers ? { ciphers: config.tlsCiphers } : {}),
+      },
     })
 
     const timestamp = new Date(payload.timestamp).toLocaleString()
@@ -72,6 +76,10 @@ export async function testEmail(config: EmailChannelConfig): Promise<{ success: 
       auth: {
         user: config.smtp.user,
         pass: config.smtp.password,
+      },
+      tls: {
+        rejectUnauthorized: false,
+        ...(config.tlsCiphers ? { ciphers: config.tlsCiphers } : {}),
       },
     })
     await transporter.verify()

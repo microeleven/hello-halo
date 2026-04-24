@@ -12,8 +12,11 @@ User Interaction Layer
 
 Apps Layer (src/main/apps)
   - spec            : App YAML parse + validate
-  - manager         : install/config/status persistence
+  - manager         : install/config/status persistence + skill-sync
   - runtime         : activation/execution/activity/escalation
+                      + im-channels/ (IM provider plugins)
+                      + sources/ (file-watcher, schedule-bridge, webhook event sources)
+                      + dispatch-inbound (IM → app-chat/prompt-chat)
   - conversation-mcp: in-process MCP server for app management tools
   - store-index     : planned
 
@@ -55,16 +58,24 @@ src/
 │   ├── apps/                          # Apps Layer (spec, manager, runtime, conversation-mcp)
 │   ├── platform/                      # Platform Layer (store, scheduler, event, memory, background)
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
-│   └── services/                      # Domain services
-│       ├── agent/                     # Agent engine (session, MCP, permissions, streaming)
-│       ├── ai-browser/               # AI Browser + tools/
-│       ├── ai-sources/               # Multi-provider auth + providers/
-│       ├── health/                   # Health monitoring & recovery
-│       ├── notify-channels/          # External notification channels
-│       ├── web-search/               # Web search MCP server
-│       ├── perf/                     # Performance monitoring
-│       ├── stealth/                  # Anti-detection evasions
-│       └── *.service.ts              # Individual services (config, space, conversation, etc.)
+│   └── services/                      # Domain services — grouped by role:
+│       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
+│       ├── ai-browser/                # AI Browser + tools/
+│       ├── ai-sources/                # Multi-provider auth + providers/
+│       ├── analytics/                 # Usage analytics
+│       ├── email-mcp/                 # Email-as-MCP tool server
+│       ├── health/                    # Diagnostics & recovery
+│       ├── notify-channels/           # Outbound notification channels (Email/WeCom/DingTalk/Feishu/Webhook)
+│       ├── perf/                      # Performance monitoring
+│       ├── stealth/                   # Anti-detection evasions
+│       ├── web-search/                # Web search MCP server
+│       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
+│                                      #   artifact, artifact-cache, search, remote, tunnel,
+│                                      #   window, overlay, onboarding, updater, notification,
+│                                      #   protocol, api-validator, model-capabilities,
+│                                      #   secure-storage, git-bash, git-bash-installer,
+│                                      #   mock-bash, browser-view, watcher-host
+│                                      #   (+ utilities: browser-login-pages, http-logger, proxy-fetch)
 │
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols
@@ -98,13 +109,23 @@ src/
     │   ├── settings/                  #   Settings sections
     │   ├── setup/                     #   Sub-components: LoginSelector, ApiSetup, ServerConnect
     │   ├── store/                     #   App Store UI
-    │   ├── diff/, search/, pulse/, onboarding/, artifact/, ...
-    │   └── (no separate ui/ dir — uses Tailwind directly)
-    ├── stores/                        # Zustand (12 stores)
-    │   ├── server.store.ts            #   Multi-server list for Capacitor (ServerEntry[])
-    │   └── ...                        #   app, chat, space, search, apps, perf, etc.
-    ├── hooks/                         # useIsMobile, useCanvasLifecycle, useLayoutPreferences, etc.
-    ├── types/index.ts                 # All shared renderer types (~740 lines)
+    │   ├── ui/                        #   Cross-domain interaction primitives (ConfirmDialog,
+    │   │                              #   ContextMenu, ...). Not shadcn-generated, but follows
+    │   │                              #   the same theme-token pattern. Home for any future
+    │   │                              #   generic primitive (Toast, Popover, Tooltip, ...)
+    │   ├── brand/, icons/, tool/, updater/, notification/
+    │   ├── diff/, search/, pulse/, onboarding/, artifact/
+    │   └── ErrorBoundary.tsx
+    ├── stores/                        # Zustand stores (one per domain: app, chat, space, canvas,
+    │   │                              # search, apps, apps-page, ai-browser, notification,
+    │   │                              # onboarding, perf, server)
+    │   └── server.store.ts            # Multi-server list for Capacitor (ServerEntry[])
+    ├── hooks/                         # useIsMobile, useCanvasLifecycle, useLayoutPreferences,
+    │                                  # useConfirmDialog, useFileOperations, useRemoteSubscription,
+    │                                  # useMigration, useSmartScroll, useAsyncHighlight,
+    │                                  # useAutoResize, useDataContent, useLazyVisible,
+    │                                  # useSearchShortcuts
+    ├── types/index.ts                 # All shared renderer types
     ├── lib/                           # utils (cn()), codemirror, highlight, perf
     ├── i18n/                          # Internationalization
     └── assets/styles/                 # globals.css, syntax-theme.css, canvas-tabs.css, browser-task-card.css
@@ -143,11 +164,24 @@ Key types:
 
 ## 6) IPC Channels
 
-**Source of truth**: `src/preload/index.ts` (~790 lines). Read it for the complete channel list.
+**Source of truth**: `src/preload/index.ts`. Read it for the complete channel list — it is the authoritative contract.
 
 ### Naming Convention
 
-All channels follow `module:action` format. Modules: `auth`, `config`, `ai-sources`, `space`, `conversation`, `agent`, `artifact`, `search`, `browser`, `ai-browser`, `canvas`, `overlay`, `remote`, `system`, `window`, `updater`, `perf`, `git-bash`, `bootstrap`, `health`, `notify-channels`, `notification`, `app`, `store`, `onboarding`.
+All channels follow `module:action` format. Modules are organized by functional area:
+
+| Area | IPC modules |
+|------|-------------|
+| Auth & config | `auth`, `config`, `cli-config`, `model-capabilities` |
+| Conversation & agent | `conversation`, `agent` |
+| Space & artifact | `space`, `artifact`, `search` |
+| Browser | `browser`, `ai-browser`, `overlay` |
+| Apps & store | `app`, `store`, `onboarding` |
+| IM channels | `im-channels`, `im-sessions`, `wecom-bot`, `weixin-ilink` |
+| Transport & remote | `remote`, `notification-channels` |
+| System & diag | `system`, `perf`, `health`, `git-bash` |
+
+New IM/platform IPC modules should be added under the matching area. See §22 for the IM-specific rule (generic lifecycle vs brand-specific setup).
 
 Two types:
 - **Request/Response** (renderer → main): registered via `ipcMain.handle()`
@@ -502,15 +536,75 @@ Remote mode: renderer -> HTTP/WS -> main.
 
 ## 20) Known Contract Gaps
 
-No known contract gaps at this time. All previously documented HTTP route gaps for App endpoints have been implemented.
+See `quick.md §4` for the current list. Keep the two documents in sync when closing or opening gaps.
 
 ## 21) Deep-Dive Module Docs
 
 When touching a module, read its design doc first:
+- `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`
 - `src/main/apps/runtime/DESIGN.md`
+- `src/main/apps/spec/PROTOCOL.md`
 - `src/main/platform/store/DESIGN.md`
 - `src/main/platform/scheduler/DESIGN.md`
 - `src/main/platform/memory/DESIGN.md`
 - `src/main/platform/background/DESIGN.md`
+
+## 22) IM Integration (Plugin Architecture)
+
+### 22.1 Scale Intent
+
+Halo targets **dozens** of IM platforms (WeCom Bot, WeChat ilink, Feishu, DingTalk, Telegram, Discord, Slack, Line, QQ, ...). All IM integrations share a **single plugin-style contract** — there is no "main IM", no brand is architecturally privileged, and the manager knows nothing about any specific IM.
+
+### 22.2 Contracts (src/shared/types/im-channel.ts + inbound-message.ts)
+
+```
+ImChannelProvider  — type-level driver (one per IM brand)
+  ├── type, displayName, description, direction
+  ├── configFields, defaultConfig        # drives settings UI
+  ├── createInstance(id, config) → Instance
+  └── validateConfig(config) → string | null
+
+ImChannelInstance  — running connection (N per provider type)
+  ├── start() / stop() / reconnect() / isConnected()
+  ├── pushToChat(chatId, text, chatType)
+  ├── onInbound(handler)
+  └── fileCapability?                    # opt-in file send
+
+ImChannelManager   — provider-agnostic lifecycle
+  ├── registerProvider(provider)
+  ├── applyConfig(configs, onInbound)    # diff + hot-reload
+  └── zero branches on ImChannelType
+
+InboundMessage / ReplyHandle  — normalized upward protocol
+  All providers convert brand-specific payloads to this shape
+  before anything reaches dispatch-inbound or runtime.
+```
+
+### 22.3 Hard Rules (Non-Negotiable)
+
+1. **Provider is the only extension point.** Adding support for a new IM = create a new `*.provider.ts` implementing `ImChannelProvider`. Do NOT modify `manager.ts`, `dispatch-inbound.ts`, or any existing provider.
+2. **Manager must stay provider-agnostic.** `ImChannelManager` must contain zero branches on `ImChannelType`. If you feel the urge to add `if (type === 'xxx')` in manager, the logic belongs in a provider method.
+3. **Never bypass the normalized inbound contract.** All inbound messages flow through `InboundMessage` / `ReplyHandle`. Never pass provider-specific payload shapes upward. If a new IM carries data the current contract can't express, extend the shared contract — do not leak provider specifics.
+4. **Providers own their resources.** Each provider manages its own temp files / tokens / connection state, and registers cleanup via the standard extension point (`cleanupImChannelTempFiles()` in `runtime/im-channels/index.ts`). Do not hard-code provider paths in bootstrap.
+5. **IPC is split by responsibility, not by brand.** `ipc/im-channels.ts` (generic lifecycle) and `ipc/im-sessions.ts` (generic session management) are the provider-agnostic entries. Brand-specific IPC files (`wecom-bot.ts`, `weixin-ilink.ts`) only expose setup/auth flows unique to that brand (e.g., QR login, token refresh). Generic operations MUST use the generic entries.
+   - Warning sign: adding a channel-level operation to `wecom-bot.ts` instead of `im-channels.ts` is almost always a violation.
+
+### 22.4 Adding a New IM — Recipe
+
+1. Create `src/main/apps/runtime/im-channels/<brand>.provider.ts` implementing `ImChannelProvider`.
+2. Register it in `src/main/apps/runtime/index.ts` via `manager.registerProvider(new XxxProvider())`.
+3. Extend the `ImChannelType` union in `src/shared/types/im-channel.ts`.
+4. If the brand has unique setup/auth flow (QR, OAuth, token refresh): add `ipc/<brand>.ts` + preload + renderer API + a setup UI component. Keep this file minimal — only brand-unique flows belong here.
+5. If the provider writes temp files: add a cleanup call in `cleanupImChannelTempFiles()`.
+6. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
+
+### 22.5 Inter-Module Access
+
+To avoid circular imports between `dispatch-inbound` and `runtime/index`, the manager is exposed via a module-level accessor in `runtime/im-channels/index.ts`:
+
+- `setActiveImChannelManager(manager)` — called by runtime/index after creation
+- `getActiveImChannelManager()` — called by dispatch-inbound / any provider that needs cross-instance lookup
+
+Providers needing manager reference MUST use this accessor, not direct import of runtime/index.

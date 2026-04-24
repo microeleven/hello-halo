@@ -199,11 +199,9 @@ export interface OpenAIChatRequest {
   logprobs?: boolean
   top_logprobs?: number
 
-  // Extended - Reasoning (some providers)
-  reasoning?: {
-    enabled?: boolean
-    effort?: 'low' | 'medium' | 'high'
-  }
+  // Extended - Reasoning effort (top-level string per OpenAI Chat Completions spec)
+  // @see https://platform.openai.com/docs/api-reference/chat/create#reasoning_effort
+  reasoning_effort?: 'low' | 'medium' | 'high'
 }
 
 // ============================================================================

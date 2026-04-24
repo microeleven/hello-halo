@@ -443,6 +443,9 @@ export interface HaloAPI {
   modelCapabilitiesGetPreset: (modelId: string) => Promise<IpcResponse>
   /** Get all preset model capabilities as a flat map */
   modelCapabilitiesAll: () => Promise<IpcResponse>
+
+  // Telemetry (fire-and-forget — no response)
+  trackEvent: (event: string, properties?: Record<string, unknown>) => void
 }
 
 interface IpcResponse<T = unknown> {
@@ -826,6 +829,11 @@ const api: HaloAPI = {
     ipcRenderer.invoke('model-capabilities:preset', modelId),
   modelCapabilitiesAll: () =>
     ipcRenderer.invoke('model-capabilities:all'),
+
+  // Telemetry (fire-and-forget)
+  trackEvent: (event: string, properties?: Record<string, unknown>) => {
+    ipcRenderer.send('analytics:report', { event, properties })
+  },
 }
 
 contextBridge.exposeInMainWorld('halo', api)

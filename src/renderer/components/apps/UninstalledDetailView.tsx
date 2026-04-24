@@ -50,7 +50,7 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
     setIsReinstalling(false)
     if (success) {
       // Navigate to the app's activity thread after reinstall
-      selectApp(appId, app.spec.type)
+      selectApp(appId, app.spec.type, app.spaceId ?? undefined)
     }
   }
 

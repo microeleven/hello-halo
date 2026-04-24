@@ -164,29 +164,33 @@ export function budgetTokensToReasoningEffort(budgetTokens: number | undefined):
 }
 
 /**
- * Convert Anthropic thinking config to OpenAI Chat reasoning config
+ * Convert Anthropic thinking config to OpenAI Chat Completions reasoning_effort
+ *
+ * Chat Completions API uses a top-level `reasoning_effort` string field,
+ * NOT a nested `reasoning` object. Returns undefined when thinking is
+ * disabled or absent so the field is omitted from the request entirely.
+ *
+ * @see https://platform.openai.com/docs/api-reference/chat/create#reasoning_effort
  */
-export function convertAnthropicThinkingToOpenAIReasoning(
+export function convertAnthropicThinkingToChatReasoningEffort(
   thinking: { type: 'enabled' | 'disabled'; budget_tokens?: number } | undefined
-): { enabled?: boolean; effort?: 'low' | 'medium' | 'high' } | undefined {
-  if (!thinking) return undefined
-
-  return {
-    enabled: thinking.type === 'enabled',
-    effort: budgetTokensToReasoningEffort(thinking.budget_tokens)
-  }
+): 'low' | 'medium' | 'high' | undefined {
+  if (!thinking || thinking.type !== 'enabled') return undefined
+  return budgetTokensToReasoningEffort(thinking.budget_tokens)
 }
 
 /**
- * Convert Anthropic thinking config to OpenAI Responses reasoning config
+ * Convert Anthropic thinking config to OpenAI Responses API reasoning config
+ *
+ * Responses API uses a nested `reasoning: { effort }` object.
+ * The `enabled` field is NOT part of the OpenAI spec and must not be sent.
+ * Returns undefined when thinking is disabled or absent.
+ *
+ * @see https://platform.openai.com/docs/api-reference/responses/create#reasoning
  */
 export function convertAnthropicThinkingToResponsesReasoning(
   thinking: { type: 'enabled' | 'disabled'; budget_tokens?: number } | undefined
-): { effort?: 'low' | 'medium' | 'high'; enabled?: boolean } | undefined {
-  if (!thinking) return undefined
-
-  return {
-    enabled: thinking.type === 'enabled',
-    effort: budgetTokensToReasoningEffort(thinking.budget_tokens)
-  }
+): { effort: 'low' | 'medium' | 'high' } | undefined {
+  if (!thinking || thinking.type !== 'enabled') return undefined
+  return { effort: budgetTokensToReasoningEffort(thinking.budget_tokens) }
 }

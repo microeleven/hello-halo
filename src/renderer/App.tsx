@@ -29,6 +29,7 @@ import { NotificationToast } from './components/notification/NotificationToast'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { isCapacitor, isElectron } from './api/transport'
+import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
 import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
@@ -107,6 +108,9 @@ export default function App() {
   } = useChatStore()
   const { initialize: initializeOnboarding } = useOnboardingStore()
   const { isSearchOpen, closeSearch, isHighlightBarVisible, hideHighlightBar, goToPreviousResult, goToNextResult, openSearch } = useSearchStore()
+
+  // Telemetry: session lifecycle + page views (fire-and-forget)
+  useTelemetry(view)
 
   // Apps system real-time event handlers — accessed via getState() inside
   // useEffect so the listener refs stay stable and never re-subscribe.

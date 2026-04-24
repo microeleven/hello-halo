@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react'
-import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight, Play } from 'lucide-react'
+import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight, Play, FileText, FolderOpen } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { EscalationCard } from './EscalationCard'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
@@ -18,6 +18,7 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useDataContent } from '../../hooks/useDataContent'
 import { useTranslation } from '../../i18n'
+import { api } from '../../api'
 
 interface ActivityEntryCardProps {
   entry: ActivityEntry
@@ -181,14 +182,37 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
           <div className="space-y-1.5">
             <MarkdownRenderer content={content.summary} className="text-sm" />
 
-            {/* Detailed data: file-based (dataPath) or inline */}
-            {resolvedData && (
-              <MarkdownRenderer content={resolvedData} className="text-sm" />
-            )}
-            {!resolvedData && content.data != null && typeof content.data === 'object' && (
-              <pre className="text-xs bg-secondary rounded-md p-2 overflow-x-auto text-muted-foreground">
-                {JSON.stringify(content.data, null, 2)}
-              </pre>
+            {/* Detailed data: file-sourced (dataPath) or inline */}
+            {content.dataPath ? (
+              <div className="rounded-md border border-border overflow-hidden">
+                <button
+                  onClick={() => api.showArtifactInFolder(content.dataPath!)}
+                  title={content.dataPath}
+                  className="w-full flex items-center gap-1.5 px-2.5 py-1.5
+                    bg-secondary/60 hover:bg-secondary text-muted-foreground
+                    text-[11px] font-mono transition-colors group border-b border-border"
+                >
+                  <FileText className="w-3 h-3 flex-shrink-0" />
+                  <span className="truncate">{content.dataPath.split('/').pop()}</span>
+                  <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                </button>
+                {resolvedData && (
+                  <div className="p-3">
+                    <MarkdownRenderer content={resolvedData} className="text-sm" />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                {resolvedData && (
+                  <MarkdownRenderer content={resolvedData} className="text-sm" />
+                )}
+                {!resolvedData && content.data != null && typeof content.data === 'object' && (
+                  <pre className="text-xs bg-secondary rounded-md p-2 overflow-x-auto text-muted-foreground">
+                    {JSON.stringify(content.data, null, 2)}
+                  </pre>
+                )}
+              </>
             )}
 
             {/* Output download link */}

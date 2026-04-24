@@ -52,9 +52,10 @@ export function convertAnthropicToOpenAIResponses(anthropicRequest: AnthropicReq
     request.tool_choice = convertAnthropicToolChoiceToResponses(anthropicRequest.tool_choice)
   }
 
-  // Convert thinking -> reasoning
-  if (anthropicRequest.thinking) {
-    request.reasoning = convertAnthropicThinkingToResponsesReasoning(anthropicRequest.thinking)
+  // Convert thinking -> reasoning (only when enabled; omit entirely when disabled)
+  const reasoning = convertAnthropicThinkingToResponsesReasoning(anthropicRequest.thinking)
+  if (reasoning) {
+    request.reasoning = reasoning
   }
 
   return {

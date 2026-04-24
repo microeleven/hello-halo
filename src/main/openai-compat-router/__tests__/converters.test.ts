@@ -26,7 +26,8 @@ describe('Request Converters', () => {
       const result = convertAnthropicToOpenAIChat(request)
 
       expect(result.request.model).toBe('claude-3-opus')
-      expect(result.request.max_tokens).toBe(1024)
+      // max_tokens is deliberately omitted — providers have their own defaults
+      expect(result.request.max_tokens).toBeUndefined()
       expect(result.request.messages).toHaveLength(1)
       expect(result.request.messages[0]).toEqual({
         role: 'user',
@@ -145,7 +146,7 @@ describe('Request Converters', () => {
       })
     })
 
-    it('should convert thinking config to reasoning', () => {
+    it('should convert thinking config to reasoning_effort', () => {
       const request: AnthropicRequest = {
         model: 'claude-3-opus',
         max_tokens: 1024,
@@ -155,10 +156,22 @@ describe('Request Converters', () => {
 
       const result = convertAnthropicToOpenAIChat(request)
 
-      expect(result.request.reasoning).toEqual({
-        enabled: true,
-        effort: 'high'
-      })
+      // Chat Completions uses top-level reasoning_effort string (not nested object)
+      expect(result.request.reasoning_effort).toBe('high')
+    })
+
+    it('should omit reasoning_effort when thinking is disabled', () => {
+      const request: AnthropicRequest = {
+        model: 'claude-3-opus',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: 'Hello' }],
+        thinking: { type: 'disabled' }
+      }
+
+      const result = convertAnthropicToOpenAIChat(request)
+
+      // Disabled thinking must NOT produce any reasoning field
+      expect(result.request.reasoning_effort).toBeUndefined()
     })
   })
 
@@ -175,7 +188,8 @@ describe('Request Converters', () => {
       const result = convertAnthropicToOpenAIResponses(request)
 
       expect(result.request.model).toBe('claude-3-opus')
-      expect(result.request.max_output_tokens).toBe(1024)
+      // max_output_tokens is deliberately omitted — many providers don't support it
+      expect(result.request.max_output_tokens).toBeUndefined()
       expect(result.request.input).toHaveLength(1)
       expect((result.request.input as any)[0].role).toBe('user')
       expect((result.request.input as any)[0].content[0]).toEqual({

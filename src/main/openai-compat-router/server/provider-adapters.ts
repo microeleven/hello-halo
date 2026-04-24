@@ -125,11 +125,14 @@ const deepSeekAdapter: ProviderAdapter = {
 /**
  * Tencent Hunyuan / CodeBuddy API uses flat reasoning parameters
  *
- * The standard OpenAI format sends `reasoning: { enabled, effort }` (nested object),
- * but Tencent's API expects flat top-level fields:
+ * Tencent's API expects:
  * - reasoning_effort: 'low' | 'medium' | 'high'
  * - reasoningEffort: 'low' | 'medium' | 'high'  (camelCase alias)
  * - reasoning_summary: 'auto'
+ *
+ * We handle two incoming formats:
+ * - Chat Completions: top-level `reasoning_effort` string (already correct key)
+ * - Responses API: nested `reasoning: { effort }` object
  *
  * Matched via adapterId from provider plugins.
  */
@@ -142,17 +145,25 @@ const tencentAdapter: ProviderAdapter = {
   },
 
   transformRequest(body: Record<string, unknown>): void {
-    const reasoning = body.reasoning as { enabled?: boolean; effort?: string } | undefined
-    if (reasoning?.enabled) {
-      const effort = reasoning.effort || 'medium'
+    // Chat Completions format: top-level reasoning_effort string
+    if (typeof body.reasoning_effort === 'string') {
+      const effort = body.reasoning_effort as string
+      body.reasoningEffort = effort
+      body.reasoning_summary = 'auto'
+      console.log(`[TencentAdapter] reasoning_effort transform: effort=${effort}`)
+      return
+    }
+
+    // Responses API format: nested reasoning.effort object
+    const reasoning = body.reasoning as { effort?: string } | undefined
+    if (reasoning?.effort) {
+      const effort = reasoning.effort
       body.reasoning_effort = effort
       body.reasoningEffort = effort
       body.reasoning_summary = 'auto'
-      console.log(`[TencentAdapter] reasoning transform applied: effort=${effort}`)
-    } else {
-      console.log('[TencentAdapter] reasoning transform skipped: not enabled')
+      delete body.reasoning
+      console.log(`[TencentAdapter] reasoning object transform: effort=${effort}`)
     }
-    delete body.reasoning
   }
 }
 

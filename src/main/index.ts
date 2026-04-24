@@ -23,14 +23,50 @@ log.transports.console.level = isDev ? 'debug' : 'info'
 log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB per file, auto-rotate
 
 // Catch unhandled errors and log them.
-// Use onError callback to suppress EPIPE errors — returning false prevents electron-log
-// from showing the error dialog. A separate process.on('uncaughtException') handler
-// does NOT work because Node.js calls ALL registered listeners; the return in one
+// Use onError callback to suppress benign/transient errors — returning false prevents
+// electron-log from showing the native error dialog. A separate process.on('uncaughtException')
+// handler does NOT work because Node.js calls ALL registered listeners; the return in one
 // listener cannot stop electron-log's listener from firing and showing the dialog.
+//
+// Suppressed categories:
+//   - EPIPE: broken pipe when writing to closed stdio
+//   - Transient network errors from long-lived TCP/TLS sockets (IMAP/SMTP/CalDAV/etc.)
+//     that are either already handled by their owning clients, or are unrecoverable
+//     background failures the user can do nothing about. These are logged as warnings
+//     and must not crash or alert the main process.
 log.errorHandler.startCatching({
   onError({ error }) {
-    if (error?.message?.includes('EPIPE')) {
+    const message = error?.message || ''
+    const code = (error as NodeJS.ErrnoException | undefined)?.code || ''
+    const stack = error?.stack || ''
+
+    if (message.includes('EPIPE') || code === 'EPIPE') {
       log.warn('[Main] Ignored EPIPE error (broken pipe)')
+      return false
+    }
+
+    // Transient socket-level errors from long-lived TCP/TLS connections.
+    // Match by error code first (authoritative), then by stack origin as a fallback
+    // for libraries that throw plain Error objects (e.g. imapflow "Socket timeout").
+    const TRANSIENT_NET_CODES = new Set([
+      'ETIMEDOUT',
+      'ETIMEOUT',        // imapflow uses this non-standard variant
+      'ECONNRESET',
+      'ECONNREFUSED',
+      'EHOSTUNREACH',
+      'ENETUNREACH',
+      'ENETDOWN',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+    ])
+    const isTransientNetCode = code && TRANSIENT_NET_CODES.has(code)
+    const isImapSocketTimeout =
+      message === 'Socket timeout' && stack.includes('imapflow')
+    const isNodeSocketTimeout =
+      /TLSSocket\._socketTimeout|Socket\._onTimeout/.test(stack)
+
+    if (isTransientNetCode || isImapSocketTimeout || isNodeSocketTimeout) {
+      log.warn(`[Main] Ignored transient network error: ${code || 'no-code'} ${message}`)
       return false
     }
   }

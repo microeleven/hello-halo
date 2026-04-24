@@ -89,6 +89,14 @@
     - Log all process stages with timestamps and context information.
     - Include error stack traces. Keep logging lightweight.
 
+13. **IM providers are plug-ins, not first-class code.**
+    - Adding support for a new IM = create one new `<brand>.provider.ts` under `src/main/apps/runtime/im-channels/`.
+    - Never modify `ImChannelManager`, `dispatch-inbound.ts`, or any existing provider when adding support.
+    - Never introduce provider-specific branches (`if (type === 'xxx')`) in generic code paths — put the logic in a provider method.
+    - Never bypass the `InboundMessage` / `ReplyHandle` contract; providers must normalize all upward traffic to it.
+    - Brand-specific IPC files (`ipc/wecom-bot.ts`, etc.) only expose unique setup/auth flows (QR login, token refresh). Generic channel operations go in `ipc/im-channels.ts` / `ipc/im-sessions.ts`.
+    - See `ARCHITECTURE.md §22` for the full contract and recipe.
+
 ## 2) Fast Task Router
 
 ### Backend / Apps / Platform
@@ -101,6 +109,9 @@
 | Change scheduling behavior | `src/main/platform/scheduler/index.ts` | `scheduler/schedule.ts`, `scheduler/store.ts`, `tests/unit/platform/scheduler/*` |
 | Add event source/filter behavior | `src/main/platform/event/*` | `src/main/bootstrap/extended.ts` |
 | Change memory behavior/tools | `src/main/platform/memory/index.ts` | `memory/tools.ts`, `memory/prompt.ts`, `tests/unit/platform/memory/*` |
+| Change agent engine (session / stream / prompt / subagent / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
+| **Support a new IM platform** | New file: `src/main/apps/runtime/im-channels/<brand>.provider.ts` | Register in `runtime/index.ts`, extend `ImChannelType` in `shared/types/im-channel.ts`. **Do NOT touch `manager.ts` / `dispatch-inbound.ts`.** Only add `ipc/<brand>.ts` if the brand has unique setup/auth flow. |
+| Change generic IM channel lifecycle / session mgmt | `src/main/apps/runtime/im-channels/manager.ts` / `dispatch-inbound.ts` | `ipc/im-channels.ts`, `ipc/im-sessions.ts`, `shared/types/im-channel.ts`. Must remain provider-agnostic. |
 
 ### Renderer / UI
 

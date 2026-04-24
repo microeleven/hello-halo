@@ -27,6 +27,8 @@ import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
 import { activeSessions } from '../../services/agent/session-manager'
 import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
+import { analytics } from '../../services/analytics/analytics.service'
+import { AnalyticsEvents } from '../../services/analytics/types'
 
 // ============================================
 // Constants
@@ -286,6 +288,14 @@ export async function dispatchInboundMessage(
     `sender=${msg.from}(${senderName}), isOwner=${isOwner}`
   )
 
+  // Telemetry: count inbound IM messages (no content)
+  void analytics.track(AnalyticsEvents.MESSAGE_RECEIVED, {
+    source: 'im',
+    channel: msg.channel,
+    chatType: msg.chatType,
+    appId: app.id,
+  })
+
   // Send an immediate acknowledgment so the user sees the <think> block appear
   // right away instead of staring at silence while session + MCP servers init.
   if (reply.streaming) {
@@ -316,6 +326,14 @@ export async function dispatchInboundMessage(
 
       // Use streaming.finish when available, else fall back to one-shot send
       onReply: (finalContent: string) => {
+        // Telemetry: count outbound replies (no content)
+        void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
+          source: 'im-reply',
+          channel: msg.channel,
+          chatType: msg.chatType,
+          appId: app.id,
+        })
+
         const replyText = finalContent.slice(0, MAX_REPLY_LENGTH)
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)

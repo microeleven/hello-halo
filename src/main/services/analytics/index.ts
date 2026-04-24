@@ -32,4 +32,5 @@ export {
 // Providers (usually not needed directly)
 export { GAProvider, createGAProvider } from './providers/ga'
 export { BaiduProvider, createBaiduProvider } from './providers/baidu'
+export { TelemetryProvider, createTelemetryProvider } from './providers/telemetry'
 export { BaseProvider } from './providers/base'

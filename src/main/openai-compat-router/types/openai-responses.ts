@@ -42,6 +42,7 @@ export type OpenAIResponsesOutputContentPart = OpenAIResponsesOutputText | OpenA
 // ============================================================================
 
 export interface OpenAIResponsesInputMessage {
+  type?: 'message'
   role: 'user' | 'assistant' | 'developer' | 'system'
   content: string | OpenAIResponsesInputContentPart[]
 }
@@ -183,7 +184,6 @@ export interface OpenAIResponsesReasoningConfig {
   effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
   summary?: 'none' | 'concise' | 'detailed'
   include?: ('encrypted_content')[]
-  enabled?: boolean // Some providers use this
 }
 
 export interface OpenAIResponsesTextFormat {

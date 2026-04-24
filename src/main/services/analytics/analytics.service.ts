@@ -2,10 +2,11 @@
  * Analytics Service - Core Service
  *
  * Core service for analytics module, responsible for:
- * 1. Managing multiple providers (Baidu Analytics, GA4)
+ * 1. Managing multiple providers (Baidu Analytics, GA4, self-hosted Telemetry)
  * 2. Unified event tracking interface
- * 3. User ID management
+ * 3. User ID management + optional externalUserId resolution
  * 4. Lifecycle event handling (install, launch, update)
+ * 5. Snapshot watermark persistence (for the startup replay module)
  */
 
 import { app } from 'electron'
@@ -21,7 +22,10 @@ import type {
 import { AnalyticsEvents } from './types'
 import { createGAProvider } from './providers/ga'
 import { createBaiduProvider } from './providers/baidu'
+import { createTelemetryProvider } from './providers/telemetry'
 import { getConfig, saveConfig } from '../config.service'
+import { getIdentitySource } from '../ai-sources/auth-loader'
+import { getCurrentSource } from '../../../shared/types'
 
 /**
  * Build-time injected analytics credentials
@@ -31,6 +35,8 @@ import { getConfig, saveConfig } from '../config.service'
 declare const __HALO_GA_MEASUREMENT_ID__: string
 declare const __HALO_GA_API_SECRET__: string
 declare const __HALO_BAIDU_SITE_ID__: string
+declare const __HALO_TELEMETRY_ENDPOINT__: string
+declare const __HALO_TELEMETRY_API_KEY__: string
 
 /**
  * Provider configuration (injected at build time)
@@ -43,6 +49,10 @@ const PROVIDER_CONFIG = {
   ga: {
     measurementId: __HALO_GA_MEASUREMENT_ID__,
     apiSecret: __HALO_GA_API_SECRET__
+  },
+  telemetry: {
+    endpoint: __HALO_TELEMETRY_ENDPOINT__,
+    apiKey: __HALO_TELEMETRY_API_KEY__
   }
 }
 
@@ -56,6 +66,29 @@ class AnalyticsService {
   private userContext: UserContext | null = null
   private config: AnalyticsConfig | null = null
   private _initialized = false
+  /**
+   * Cached external ID resolution. The cache key is (sourceId, path) so that
+   * a runtime change to `product.json.identitySource` (e.g. uid → email)
+   * invalidates the cache on the next refresh instead of returning stale data.
+   */
+  private resolvedExternalId: { sourceId: string; path: string; uid: string } | null = null
+
+  /**
+   * Resolves once `init()` has completed — whether it enabled providers or
+   * opted out (dev mode, empty credentials). Consumers that only need to
+   * know "has init been attempted" can `await whenSettled()` instead of
+   * polling `initialized`. Reset on `destroy()` so subsequent re-inits of
+   * the singleton (mainly used by tests) get a fresh gate.
+   */
+  private settledResolver: (() => void) | null = null
+  private settledPromise: Promise<void> = new Promise<void>(resolve => {
+    this.settledResolver = resolve
+  })
+
+  /** Throttling state for dropped-event warnings. */
+  private droppedEventCount = 0
+  private lastDroppedWarnTs = 0
+  private static readonly DROP_WARN_INTERVAL_MS = 30_000
 
   private constructor() {}
 
@@ -84,30 +117,73 @@ class AnalyticsService {
     // Skip analytics in development mode
     if (is.dev) {
       console.log('[Analytics] Skipping in development mode')
+      this.markSettled()
       return
     }
 
     if (this._initialized) {
       console.log('[Analytics] Already initialized')
+      this.markSettled()
       return
     }
 
     console.log('[Analytics] Initializing...')
 
-    // Load or create config
-    this.config = this.loadOrCreateConfig()
+    try {
+      // Load or create config
+      this.config = this.loadOrCreateConfig()
 
-    // Build user context
-    this.userContext = this.buildUserContext()
+      // Build user context
+      this.userContext = this.buildUserContext()
 
-    // Initialize providers
-    await this.initProviders()
+      // Initialize providers
+      await this.initProviders()
 
-    this._initialized = true
-    console.log('[Analytics] Initialized successfully')
+      this._initialized = true
+      console.log('[Analytics] Initialized successfully')
 
-    // Handle lifecycle events
-    await this.handleLifecycleEvents()
+      // Handle lifecycle events
+      await this.handleLifecycleEvents()
+    } finally {
+      // Always unblock `whenSettled()` callers — the startup snapshot and
+      // any other consumers should not hang indefinitely if a provider
+      // init throws unexpectedly.
+      this.markSettled()
+    }
+  }
+
+  /**
+   * Resolve the settled-gate exactly once. Idempotent.
+   */
+  private markSettled(): void {
+    if (this.settledResolver) {
+      this.settledResolver()
+      this.settledResolver = null
+    }
+  }
+
+  /**
+   * Returns a promise that resolves once `init()` has completed (successfully
+   * or skipped). Use this from consumers that start concurrently with init —
+   * e.g. the startup snapshot — to avoid a race where their first `track()`
+   * is silently dropped because the service is not yet initialized.
+   *
+   * An optional timeout guards against a never-initialized service (e.g. a
+   * bootstrap path that forgets to call init). Returns `true` if settled
+   * within the timeout, `false` otherwise.
+   */
+  async whenSettled(timeoutMs = 10_000): Promise<boolean> {
+    let timer: NodeJS.Timeout | null = null
+    const timeoutPromise = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs)
+      if (timer.unref) timer.unref()
+    })
+    const result = await Promise.race([
+      this.settledPromise.then(() => true as const),
+      timeoutPromise,
+    ])
+    if (timer) clearTimeout(timer)
+    return result
   }
 
   /**
@@ -120,9 +196,17 @@ class AnalyticsService {
     properties?: Record<string, unknown>
   ): Promise<void> {
     if (!this._initialized || !this.userContext) {
-      console.warn('[Analytics] Not initialized, event dropped:', eventName)
+      // Renderer fires many events early in startup, before `init()` has
+      // finished — spamming a warn per event is unhelpful. Log the first
+      // drop and then throttle to one warning per DROP_WARN_INTERVAL_MS,
+      // so a persistent bug (e.g. init never called) is still visible.
+      this.logDroppedEvent(eventName)
       return
     }
+
+    // Refresh externalUserId lazily on each call so user login/logout between
+    // events updates the telemetry identity without a service restart.
+    this.refreshExternalUserId()
 
     const event: AnalyticsEvent = {
       name: eventName,
@@ -130,14 +214,54 @@ class AnalyticsService {
       timestamp: Date.now()
     }
 
-    console.log(`[Analytics] Tracking: ${eventName}`, properties || '')
-
     // Track to all providers in parallel (isolated from each other)
     await Promise.allSettled(
       this.providers.map(provider =>
         provider.track(event, this.userContext!)
       )
     )
+  }
+
+  /**
+   * Record a dropped event and emit a throttled warning so a persistent
+   * misconfiguration (e.g. `init()` never called) is observable without
+   * spamming the console during the normal startup race window.
+   */
+  private logDroppedEvent(eventName: string): void {
+    this.droppedEventCount += 1
+    const now = Date.now()
+    if (now - this.lastDroppedWarnTs >= AnalyticsService.DROP_WARN_INTERVAL_MS) {
+      console.warn(
+        `[Analytics] Dropped ${this.droppedEventCount} event(s) before init (most recent: ${eventName})`
+      )
+      this.lastDroppedWarnTs = now
+      this.droppedEventCount = 0
+    }
+  }
+
+  /**
+   * Shut down all providers. Called during app cleanup.
+   *
+   * Providers with buffered state (TelemetryProvider) flush their queue here.
+   * Errors from a single provider never block others.
+   */
+  async destroy(): Promise<void> {
+    if (!this._initialized) return
+
+    await Promise.allSettled(
+      this.providers.map(async provider => {
+        if (typeof provider.destroy === 'function') {
+          try {
+            await provider.destroy()
+          } catch (error) {
+            console.warn(`[Analytics] ${provider.name} destroy failed:`, error)
+          }
+        }
+      })
+    )
+
+    this._initialized = false
+    console.log('[Analytics] Destroyed')
   }
 
   /**
@@ -178,6 +302,77 @@ class AnalyticsService {
   }
 
   /**
+   * Populate `userContext.externalUserId` from the current AI source when
+   * `product.json.identitySource` is configured.
+   *
+   * Idempotent: if the active source ID hasn't changed since the last call,
+   * we reuse the cached resolution and avoid re-reading config.
+   */
+  private refreshExternalUserId(): void {
+    if (!this.userContext) return
+
+    const path = getIdentitySource()
+    if (!path) {
+      this.userContext.externalUserId = undefined
+      return
+    }
+
+    try {
+      const aiSources = getConfig().aiSources
+      if (!aiSources || aiSources.version !== 2) {
+        this.userContext.externalUserId = undefined
+        return
+      }
+
+      const source = getCurrentSource(aiSources)
+      if (!source) {
+        this.userContext.externalUserId = undefined
+        return
+      }
+
+      // Fast path: same source + same path as last time → reuse cached uid.
+      if (
+        this.resolvedExternalId &&
+        this.resolvedExternalId.sourceId === source.id &&
+        this.resolvedExternalId.path === path
+      ) {
+        this.userContext.externalUserId = this.resolvedExternalId.uid
+        return
+      }
+
+      const uid = this.resolveDotPath(source as unknown as Record<string, unknown>, path)
+      if (typeof uid === 'string' && uid.length > 0) {
+        this.resolvedExternalId = { sourceId: source.id, path, uid }
+        this.userContext.externalUserId = uid
+      } else {
+        this.resolvedExternalId = null
+        this.userContext.externalUserId = undefined
+      }
+    } catch (err) {
+      // Never let identity resolution break tracking.
+      console.warn('[Analytics] externalUserId resolution failed:', err)
+      this.userContext.externalUserId = undefined
+    }
+  }
+
+  /**
+   * Walk a dot-separated path through a plain object.
+   * Returns undefined for any missing segment or non-object intermediate.
+   */
+  private resolveDotPath(obj: Record<string, unknown>, path: string): unknown {
+    const parts = path.split('.')
+    let current: unknown = obj
+    for (const part of parts) {
+      if (current && typeof current === 'object' && part in (current as Record<string, unknown>)) {
+        current = (current as Record<string, unknown>)[part]
+      } else {
+        return undefined
+      }
+    }
+    return current
+  }
+
+  /**
    * Initialize all providers
    */
   private async initProviders(): Promise<void> {
@@ -211,6 +406,20 @@ class AnalyticsService {
       console.warn('[Analytics] GA4 provider init failed:', error)
     }
 
+    // Self-hosted Telemetry provider (enterprise/internal builds)
+    try {
+      const telemetryProvider = createTelemetryProvider(
+        PROVIDER_CONFIG.telemetry.endpoint,
+        PROVIDER_CONFIG.telemetry.apiKey
+      )
+      await telemetryProvider.init(userId)
+      if (telemetryProvider.initialized) {
+        this.providers.push(telemetryProvider)
+      }
+    } catch (error) {
+      console.warn('[Analytics] Telemetry provider init failed:', error)
+    }
+
     console.log(`[Analytics] ${this.providers.length} provider(s) active:`,
       this.providers.map(p => p.name).join(', ') || 'none'
     )
@@ -241,12 +450,7 @@ class AnalyticsService {
 
     // Update lastVersion
     if (lastVersion !== currentVersion) {
-      saveConfig({
-        analytics: {
-          ...this.config!,
-          lastVersion: currentVersion
-        }
-      })
+      this.persistConfig({ lastVersion: currentVersion })
     }
   }
 
@@ -262,6 +466,46 @@ class AnalyticsService {
    */
   getBaiduSiteId(): string {
     return PROVIDER_CONFIG.baidu.siteId
+  }
+
+  /**
+   * Snapshot watermark getter.
+   *
+   * Returns the pair of `(lastSnapshotRunId, lastSnapshotTs)` that the
+   * startup snapshot module persisted on the previous launch. Either field
+   * may be undefined when this is the first snapshot.
+   */
+  getSnapshotState(): { lastSnapshotRunId?: string; lastSnapshotTs?: number } {
+    if (!this.config) return {}
+    return {
+      lastSnapshotRunId: this.config.lastSnapshotRunId,
+      lastSnapshotTs: this.config.lastSnapshotTs,
+    }
+  }
+
+  /**
+   * Snapshot watermark setter — persists to config.json.
+   *
+   * Called by the startup snapshot module after a successful replay so the
+   * next launch only ships new automation runs to telemetry.
+   */
+  setSnapshotState(state: { runId?: string; ts?: number }): void {
+    if (!this.config) return
+    this.persistConfig({
+      lastSnapshotRunId: state.runId ?? this.config.lastSnapshotRunId,
+      lastSnapshotTs: state.ts ?? this.config.lastSnapshotTs,
+    })
+  }
+
+  /**
+   * Merge a partial update into the in-memory config and persist it.
+   * Centralized to avoid drift between the in-memory `this.config` and
+   * the serialized `config.analytics` block.
+   */
+  private persistConfig(update: Partial<AnalyticsConfig>): void {
+    if (!this.config) return
+    this.config = { ...this.config, ...update }
+    saveConfig({ analytics: this.config })
   }
 }
 

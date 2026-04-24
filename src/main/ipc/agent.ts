@@ -20,6 +20,8 @@ import {
 } from '../services/agent'
 import { getMainWindow } from '../services/window.service'
 import { broadcastToWebSocket, broadcastToAll } from '../http/websocket'
+import { analytics } from '../services/analytics/analytics.service'
+import { AnalyticsEvents } from '../services/analytics/types'
 
 // Module-level subscription disposables (lifetime = process lifetime)
 // Stored to establish correct Disposable pattern; these are never disposed
@@ -92,6 +94,12 @@ export function registerAgentHandlers(): void {
       }
     ) => {
       try {
+        // Telemetry: count user-sent messages (no content)
+        void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
+          source: 'agent',
+          spaceId: request.spaceId,
+          hasImages: Array.isArray(request.images) && request.images.length > 0,
+        })
         await sendMessage(request)
         return { success: true }
       } catch (error: unknown) {

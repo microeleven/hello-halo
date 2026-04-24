@@ -114,6 +114,15 @@ export interface AppListFilter {
 /** Callback signature for status change notifications */
 export type StatusChangeHandler = (appId: string, oldStatus: AppStatus, newStatus: AppStatus) => void
 
+/** Callback fired after a successful install. Receives the fully-persisted app. */
+export type AppInstalledHandler = (app: InstalledApp) => void
+
+/**
+ * Callback fired after a successful uninstall. Receives the app record captured
+ * just before the status transition so subscribers still see the full spec.
+ */
+export type AppUninstalledHandler = (app: InstalledApp) => void
+
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
 
@@ -365,4 +374,16 @@ export interface AppManagerService {
    * Returns an unsubscribe function.
    */
   onAppStatusChange(handler: StatusChangeHandler): Unsubscribe
+
+  /**
+   * Register a callback fired after a new install (including reinstall).
+   * Returns an unsubscribe function.
+   */
+  onAppInstalled(handler: AppInstalledHandler): Unsubscribe
+
+  /**
+   * Register a callback fired after a soft-delete (uninstall).
+   * Returns an unsubscribe function.
+   */
+  onAppUninstalled(handler: AppUninstalledHandler): Unsubscribe
 }

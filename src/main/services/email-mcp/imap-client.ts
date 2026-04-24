@@ -86,13 +86,19 @@ export class ImapClient {
   /**
    * Ensure IMAP connection is established.
    * Lazy: called on first tool invocation.
+   *
+   * Also wires up 'error'/'close' listeners so that async socket failures
+   * (e.g. idle-connection socket timeouts, server-side disconnects, network
+   * drops after sleep/wake) do NOT propagate to the main process as
+   * uncaughtException. Without a listener, ImapFlow.emit('error', err) would
+   * bubble up and trigger Electron's native error dialog.
    */
   async connect(): Promise<void> {
     if (this.connected && this.client) return
 
     const { ImapFlow } = await getImapFlow()
 
-    this.client = new ImapFlow({
+    const client = new ImapFlow({
       host: this.config.smtp.host,
       port: 993,
       secure: true,
@@ -107,7 +113,28 @@ export class ImapClient {
       logger: false,
     })
 
-    await this.client.connect()
+    // Swallow async socket/protocol errors. Any in-flight operation will
+    // still reject via its awaited promise; this listener only prevents the
+    // error from becoming an uncaughtException when no operation is pending
+    // (e.g. socket idle timeout between tool calls).
+    client.on('error', (err: Error & { code?: string }) => {
+      console.warn(
+        `[EmailMCP][IMAP] Client error (auto-recovery on next call): ${err?.code || ''} ${err?.message || err}`
+      )
+      this.connected = false
+    })
+
+    // Mark as disconnected when the server/socket closes so the next
+    // tool call triggers a fresh connect() instead of using a dead client.
+    client.on('close', () => {
+      if (this.connected) {
+        console.log('[EmailMCP][IMAP] Connection closed by server or network')
+      }
+      this.connected = false
+    })
+
+    await client.connect()
+    this.client = client
     this.connected = true
     console.log(`[EmailMCP][IMAP] Connected to ${this.config.smtp.host}:993`)
   }
@@ -146,7 +173,7 @@ export class ImapClient {
 
     for (const mailbox of mailboxes) {
       const displayName = getFolderDisplayName(mailbox.path)
-      const flags = new Set(mailbox.flags?.map((f: string) => f) ?? [])
+      const flags = new Set(Array.from(mailbox.flags ?? []))
       const sysType = identifySystemFolder(mailbox.path, flags)
 
       const info: FolderInfo = {

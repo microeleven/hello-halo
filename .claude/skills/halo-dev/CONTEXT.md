@@ -21,10 +21,11 @@ Halo is a local-first Electron AI product with:
 - Artifact/file workflows and content viewing (Content Canvas)
 - AI Browser automation capability
 - Optional remote access via HTTP + WebSocket (same React app, different transport)
-- Installable Apps foundation (automation-focused digital humans)
+- Installable Apps foundation — digital humans driven by schedule, event, **or inbound IM messages**
+- **IM Channel Integration** — dozens of IM platforms (WeCom, WeChat ilink, Feishu, DingTalk, ...) as first-class input/output via a unified plugin-style provider architecture
 - App Store for discovering and installing apps/skills
 
-## 2) Current Delivery State (as of March 2026)
+## 2) Current Delivery State
 
 ### Implemented
 
@@ -36,11 +37,12 @@ Halo is a local-first Electron AI product with:
 - **AI Sources**: Multi-provider architecture (OAuth + Custom API Key), v2 format
 - **Remote Access**: HTTP Server + WebSocket, PIN auth, tunnel support
 - **OpenAI Compatible Mode**: Anthropic <-> OpenAI protocol bridge
-- **Apps Layer**: spec, manager, runtime, conversation-mcp implemented
+- **Apps Layer**: spec, manager, runtime, conversation-mcp implemented; runtime supports schedule/event/IM triggers
+- **IM Channels**: Plugin-style provider architecture — currently ships WeCom Bot + WeChat ilink; designed to scale to dozens of IM platforms via `ImChannelProvider` interface
 - **Platform Layer**: store (SQLite), scheduler, event, memory, background implemented
 - **App Store**: Registry system, store UI, install/uninstall
 - **Health system**: Diagnostics, recovery, process guardian
-- **Notification channels**: Email, WeChat Work, DingTalk, Feishu, Webhook
+- **Notification channels**: Email, WeChat Work, DingTalk, Feishu, Webhook (outbound-only; distinct from IM Channels which are bidirectional)
 - **MCP**: Supports stdio/http/sse MCP server types
 - **Settings**: Multi-section settings with navigation
 - **i18n**: Internationalization support

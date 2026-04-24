@@ -154,7 +154,7 @@ export function AppList({ onInstall, onManualAdd, spaceMap, mode = 'automation' 
                     if (app.status === 'uninstalled') {
                       selectApp(app.id, 'uninstalled')
                     } else {
-                      selectApp(app.id, app.spec.type)
+                      selectApp(app.id, app.spec.type, app.spaceId ?? undefined)
                     }
                   }}
                 />
@@ -169,7 +169,7 @@ export function AppList({ onInstall, onManualAdd, spaceMap, mode = 'automation' 
         {!isAppsMode && (
           <button
             onClick={onInstall}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-md transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-primary hover:bg-primary/10 rounded-lg transition-colors"
           >
             <Plus className="w-4 h-4" />
             {actionText}
@@ -178,7 +178,7 @@ export function AppList({ onInstall, onManualAdd, spaceMap, mode = 'automation' 
         {isAppsMode && onManualAdd && (
           <button
             onClick={onManualAdd}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-md transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-primary hover:bg-primary/10 rounded-lg transition-colors"
           >
             <Upload className="w-4 h-4" />
             {t('Manual Add SKILL/MCP')}

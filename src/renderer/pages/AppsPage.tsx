@@ -100,7 +100,7 @@ export function AppsPage() {
         const isNonAutomation = NON_AUTOMATION_TYPES.has(app.spec.type)
         const targetTab = isNonAutomation ? 'my-apps' : 'my-digital-humans'
         if (currentTab !== targetTab) setCurrentTab(targetTab)
-        selectApp(app.id, app.status === 'uninstalled' ? 'uninstalled' : app.spec.type)
+        selectApp(app.id, app.status === 'uninstalled' ? 'uninstalled' : app.spec.type, app.spaceId ?? undefined)
         setInitialAppId(null)
       }
     }
@@ -126,7 +126,7 @@ export function AppsPage() {
       const activeApps = appsForCurrentTab.filter(a => a.status !== 'uninstalled')
       const waitingApp = activeApps.find(a => a.status === 'waiting_user')
       const firstApp = waitingApp ?? activeApps[0] ?? appsForCurrentTab[0]
-      selectApp(firstApp.id, firstApp.status === 'uninstalled' ? 'uninstalled' : firstApp.spec.type)
+      selectApp(firstApp.id, firstApp.status === 'uninstalled' ? 'uninstalled' : firstApp.spec.type, firstApp.spaceId ?? undefined)
     }
   }, [appsForCurrentTab, selectedAppId, selectApp, currentTab, isMobile])
 

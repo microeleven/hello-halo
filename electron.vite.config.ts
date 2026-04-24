@@ -45,6 +45,10 @@ const analyticsDefine = {
   '__HALO_GA_MEASUREMENT_ID__': JSON.stringify(envLocal.HALO_GA_MEASUREMENT_ID || ''),
   '__HALO_GA_API_SECRET__': JSON.stringify(envLocal.HALO_GA_API_SECRET || ''),
   '__HALO_BAIDU_SITE_ID__': JSON.stringify(envLocal.HALO_BAIDU_SITE_ID || ''),
+  // Self-hosted telemetry endpoint + bearer key.
+  // When either value is empty the TelemetryProvider is disabled (default in open-source builds).
+  '__HALO_TELEMETRY_ENDPOINT__': JSON.stringify(envLocal.HALO_TELEMETRY_ENDPOINT || ''),
+  '__HALO_TELEMETRY_API_KEY__': JSON.stringify(envLocal.HALO_TELEMETRY_API_KEY || ''),
 }
 
 /**

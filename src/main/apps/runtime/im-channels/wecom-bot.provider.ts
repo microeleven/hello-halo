@@ -396,6 +396,16 @@ class WecomStreamSession implements StreamingHandle {
     this.finished = true
     this.clearThrottle()
 
+    // Debug: detect content mismatch between streamed text_delta accumulation and final SDK text
+    const streamedText = this.answerText
+    if (streamedText !== finalText) {
+      console.warn(
+        `[WecomStream:${this.instanceId}] ⚠️ Content mismatch on finish!\n` +
+        `  streamed (${streamedText.length} chars): ${streamedText.slice(0, 200)}${streamedText.length > 200 ? '...' : ''}\n` +
+        `  final   (${finalText.length} chars): ${finalText.slice(0, 200)}${finalText.length > 200 ? '...' : ''}`
+      )
+    }
+
     this.answerText = finalText
     this.sendPacket(true)
     this.onDispose?.()
@@ -478,6 +488,15 @@ class WecomStreamSession implements StreamingHandle {
     if (!this.started) {
       this.started = true
       console.log(`[WecomStream:${this.instanceId}] First packet sent (streamId=${this.streamId})`)
+    }
+
+    // Debug: log finish packet content for diagnosing garbled display issues
+    if (finish) {
+      console.log(
+        `[WecomStream:${this.instanceId}] 📤 FINISH packet (streamId=${this.streamId}):\n` +
+        `  bytes=${Buffer.byteLength(content, 'utf8')}, progressLines=${this.progressLines.length}\n` +
+        `  content=${content.slice(0, 500)}${content.length > 500 ? '...' : ''}`
+      )
     }
 
     try {

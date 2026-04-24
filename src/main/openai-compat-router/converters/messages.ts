@@ -216,6 +216,7 @@ export function convertAnthropicSystemToResponsesInput(
 
   // Use 'system' role for compatibility (some providers don't support 'developer')
   return {
+    type: 'message',
     role: 'system',
     content: [{ type: 'input_text', text: sysText }]
   }
@@ -252,6 +253,7 @@ export function convertAnthropicMessagesToResponsesInput(
     if (typeof msg.content === 'string') {
       const contentType = msg.role === 'user' ? 'input_text' : 'output_text'
       result.push({
+        type: 'message',
         role: msg.role,
         content: [{ type: contentType, text: msg.content }]
       } as OpenAIResponsesInputMessage)
@@ -284,6 +286,7 @@ export function convertAnthropicMessagesToResponsesInput(
 
       if (contentParts.length > 0) {
         result.push({
+          type: 'message',
           role: 'user',
           content: contentParts
         })
@@ -302,6 +305,7 @@ export function convertAnthropicMessagesToResponsesInput(
 
       if (contentParts.length > 0) {
         result.push({
+          type: 'message',
           role: 'assistant',
           content: contentParts
         })

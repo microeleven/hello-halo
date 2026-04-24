@@ -7,7 +7,7 @@ import { convertAnthropicMessagesToOpenAIChat } from '../messages'
 import {
   convertAnthropicToolsToOpenAIChat,
   convertAnthropicToolChoiceToOpenAIChat,
-  convertAnthropicThinkingToOpenAIReasoning
+  convertAnthropicThinkingToChatReasoningEffort
 } from '../tools'
 
 export interface ConversionResult {
@@ -43,9 +43,10 @@ export function convertAnthropicToOpenAIChat(anthropicRequest: AnthropicRequest)
     openaiRequest.tool_choice = convertAnthropicToolChoiceToOpenAIChat(anthropicRequest.tool_choice)
   }
 
-  // Convert thinking -> reasoning
-  if (anthropicRequest.thinking) {
-    openaiRequest.reasoning = convertAnthropicThinkingToOpenAIReasoning(anthropicRequest.thinking)
+  // Convert thinking -> reasoning_effort (top-level string per Chat Completions spec)
+  const reasoningEffort = convertAnthropicThinkingToChatReasoningEffort(anthropicRequest.thinking)
+  if (reasoningEffort) {
+    openaiRequest.reasoning_effort = reasoningEffort
   }
 
   return {

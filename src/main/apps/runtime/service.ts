@@ -31,6 +31,11 @@ import type {
   ActivityQueryOptions,
   ActivityEntry,
   AutomationRun,
+  RunStartedHandler,
+  RunFinishedHandler,
+  RunStartedEvent,
+  RunFinishedEvent,
+  RuntimeUnsubscribe,
 } from './types'
 import { AppNotRunnableError, NoSubscriptionsError, EscalationNotFoundError, ConcurrencyLimitError } from './errors'
 import { Semaphore } from './concurrency'
@@ -85,6 +90,36 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   // ── Internal State ──────────────────────────────────
   const activations = new Map<string, ActivationState>()
   const semaphore = new Semaphore(DEFAULT_MAX_CONCURRENT)
+  // Lifecycle event listeners (used by analytics; handlers are isolated).
+  const runStartedHandlers: RunStartedHandler[] = []
+  const runFinishedHandlers: RunFinishedHandler[] = []
+
+  function emitRunStarted(evt: RunStartedEvent): void {
+    for (const handler of runStartedHandlers) {
+      try {
+        handler(evt)
+      } catch (err) {
+        console.error('[Runtime] onRunStarted handler error:', err)
+      }
+    }
+  }
+
+  function emitRunFinished(evt: RunFinishedEvent): void {
+    for (const handler of runFinishedHandlers) {
+      try {
+        handler(evt)
+      } catch (err) {
+        console.error('[Runtime] onRunFinished handler error:', err)
+      }
+    }
+  }
+
+  /** Map RunOutcome -> the DB-aligned status used in RunFinishedEvent. */
+  function outcomeToStatus(outcome: RunOutcome): 'ok' | 'error' | 'skipped' {
+    if (outcome === 'error') return 'error'
+    if (outcome === 'skipped' || outcome === 'noop') return 'skipped'
+    return 'ok'
+  }
   // Keyed by unique execution key ("{appId}:{counter}") -- NOT by appId alone.
   // This avoids concurrent runs for the same App overwriting each other's
   // abort controller, ensuring deactivate() can cancel ALL running instances.
@@ -410,6 +445,36 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         emitEntry: emitActivityEntry,
         existingRunId: continueOptions?.existingRunId,
         existingSessionKey: continueOptions?.existingSessionKey,
+        // Fire the `onRunStarted` lifecycle event at the *real* start of the
+        // run (after DB row insertion, before AI session build). This keeps
+        // the started/finished event pair semantically meaningful for
+        // dashboards that count in-flight runs.
+        onRunStarted: ({ runId, sessionKey, startedAt }) => {
+          emitRunStarted({
+            appId: app.id,
+            runId,
+            sessionKey,
+            triggerType: trigger.type,
+            startedAt,
+          })
+        },
+      })
+
+      // ── Emit finished lifecycle event (analytics subscribers) ──
+      // executeRun() finalizes the DB row before returning, so we can emit
+      // finished here with authoritative timestamps. Handler exceptions
+      // are swallowed by emitRunFinished.
+      emitRunFinished({
+        appId: app.id,
+        runId: result.runId,
+        sessionKey: result.sessionKey,
+        triggerType: trigger.type,
+        outcome: result.outcome,
+        status: outcomeToStatus(result.outcome),
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        durationMs: result.durationMs,
+        errorMessage: result.errorMessage,
       })
 
       const runTag = result.runId.slice(0, 8)
@@ -1322,6 +1387,22 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       semaphore.rejectAll('Runtime shutting down')
 
       console.log(`[Runtime] Deactivated ${appIds.length} apps`)
+    },
+
+    onRunStarted(handler: RunStartedHandler): RuntimeUnsubscribe {
+      runStartedHandlers.push(handler)
+      return () => {
+        const idx = runStartedHandlers.indexOf(handler)
+        if (idx > -1) runStartedHandlers.splice(idx, 1)
+      }
+    },
+
+    onRunFinished(handler: RunFinishedHandler): RuntimeUnsubscribe {
+      runFinishedHandlers.push(handler)
+      return () => {
+        const idx = runFinishedHandlers.indexOf(handler)
+        if (idx > -1) runFinishedHandlers.splice(idx, 1)
+      }
     },
   }
 

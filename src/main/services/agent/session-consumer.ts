@@ -185,9 +185,13 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
     const onConsumerAbort = () => turnAbort.abort()
     state.consumerAbort.signal.addEventListener('abort', onConsumerAbort, { once: true })
 
-    // Create fresh session state for this turn
+    // Create fresh session state for this turn.
+    // IMPORTANT: Do NOT set state.currentSessionState here. It is set in onTurnInit
+    // (when CC emits system:init) so that idle-waiting consumers are correctly
+    // identified as idle. Setting it here caused getOrCreateV2Session to mistake
+    // an idle consumer (blocked on stream()) for an actively-processing one,
+    // deferring session rebuilds by one turn — the "model switch one step late" bug.
     const sessionState = createSessionState(spaceId, conversationId, turnAbort)
-    state.currentSessionState = sessionState
     state.processingTurn = true
 
     const turnStartTime = Date.now()
@@ -211,6 +215,11 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           onRawMessage: undefined,
           onTurnInit: () => {
             receivedAnyEvent = true
+
+            // Mark consumer as actively processing. From this point on,
+            // getOrCreateV2Session will correctly defer session rebuilds
+            // until this turn completes (protecting in-flight responses).
+            state.currentSessionState = sessionState
 
             // Create assistant placeholder message for this turn
             addMessage(spaceId, conversationId, {
