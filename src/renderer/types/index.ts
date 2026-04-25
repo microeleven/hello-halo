@@ -127,7 +127,7 @@ export interface AgentConfig {
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableTeams?: boolean;    // Enable Agent Teams (multi-agent collaboration)
   disabledTools?: string[]; // Tools disabled by user (Extended Capabilities toggles)
-  logHttpRequests?: boolean; // [Developer] Log raw outbound HTTP requests to http-raw.log
+  developerMode?: boolean;   // [Developer] Enable verbose diagnostic logging across the system
 }
 
 // Schedule value type (used by apps.store + schedule components)

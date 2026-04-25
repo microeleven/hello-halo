@@ -145,6 +145,7 @@ function buildDisallowedTools(
 export async function resolveCredentialsForSdk(
   credentials: ApiCredentials
 ): Promise<ResolvedSdkCredentials> {
+  console.debug(`[SDK Config] resolveCredentialsForSdk: provider=${credentials.provider}, model=${credentials.model}, baseUrl=${credentials.baseUrl}`)
   // Experimental: route Anthropic through local router for interceptor coverage
   if (PROXY_ANTHROPIC && credentials.provider === 'anthropic') {
     return resolveAnthropicPassthrough(credentials)
@@ -444,6 +445,7 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
   } = params
 
   console.log(`[SDK Config] buildBaseSdkOptions: workDir="${workDir}", spaceId="${spaceId}", configDirMode="${params.configDirMode ?? 'halo'}"`)
+  console.debug(`[SDK Config] buildBaseSdkOptions details: model=${credentials.sdkModel}, displayModel=${credentials.displayModel}, maxTurns=${params.maxTurns}, promptProfile=${params.promptProfile}, enableTeams=${params.enableTeams}, disabledTools=[${(params.disabledTools || []).join(', ')}]`)
 
   // Build environment variables
   const env = buildSdkEnv({

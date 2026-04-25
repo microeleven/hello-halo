@@ -8,6 +8,8 @@ No need to write translation files because the translation is automated.
 
 Before making any changes, you must read the halo-dev skill.
 
+Always design with high maintainability and modularity, aligned with long-term architectural planning and the evolution of code quality.
+
 Run `npm run i18n` before commit by user.
 
 **rules.**

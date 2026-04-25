@@ -261,6 +261,7 @@ function startSessionCleanup(): void {
 
   cleanupIntervalId = setInterval(() => {
     const now = Date.now()
+    console.debug(`[Agent] Session cleanup sweep: ${v2Sessions.size} sessions, ${consumers.size} consumers`)
     // Avoid TS downlevelIteration requirement (main process tsconfig doesn't force target=es2015)
     for (const [convId, info] of Array.from(v2Sessions.entries())) {
       // Check 1: Clean up sessions with dead processes (killed by OS, crashed, etc.)
@@ -534,6 +535,7 @@ export async function getOrCreateV2Session(
   // If sessionId exists, pass resume to let CC restore history from disk
   // After first message, the process stays alive and maintains context in memory
   console.log(`[Agent][${conversationId}] Creating new V2 session...`)
+  console.debug(`[Agent][${conversationId}] SDK options: model=${sdkOptions.model}, maxTurns=${sdkOptions.maxTurns}, mcpServers=[${Object.keys(sdkOptions.mcpServers || {}).join(', ')}], resume=${!!sessionId}`)
 
   // Handle session resumption with migration support
   let effectiveSessionId = sessionId

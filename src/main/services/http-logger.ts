@@ -1,22 +1,20 @@
 /**
- * HTTP Request Logger
+ * HTTP Request/Response Logger
  *
- * Dedicated electron-log instance for raw outbound HTTP request logging.
- * Intended for developer use only — captures every request made through
- * proxyFetch(), including full headers (auth tokens) and request body.
+ * Dedicated electron-log instance for raw outbound HTTP traffic logging.
+ * Captures every request and response made through proxyFetch(), including
+ * full headers (auth tokens), request body, response status, and timing.
  *
- * Controlled by: Settings > Advanced > Log HTTP Requests
+ * Lifecycle: Controlled exclusively by developer-mode.ts (central controller).
+ * This module does NOT subscribe to config changes directly — it exposes
+ * setHttpLogging() and is toggled by the Developer Mode orchestrator.
+ *
  * Log file: same directory as main.log, filename = http-raw.log
  *   macOS:   ~/Library/Logs/Halo/http-raw.log
  *   Windows: %USERPROFILE%\AppData\Roaming\Halo\logs\http-raw.log
- *
- * Self-registers with onAgentConfigChange at module load — proxy-fetch.ts
- * simply imports this module and calls isHttpLoggingEnabled() / logHttpRequest().
- * No explicit wiring required in bootstrap.
  */
 
 import log from 'electron-log/main.js'
-import { getConfig, onAgentConfigChange } from './config.service'
 
 // ============================================================================
 // Dedicated log instance
@@ -24,6 +22,8 @@ import { getConfig, onAgentConfigChange } from './config.service'
 
 const httpLog = log.create({ logId: 'http-raw' })
 
+// Write to a dedicated file, not main.log
+httpLog.transports.file.fileName = 'http-raw.log'
 // File only — do NOT write to console (would pollute the main log stream)
 httpLog.transports.console.level = false
 httpLog.transports.file.level = 'info'
@@ -110,6 +110,16 @@ export interface HttpRequestLogEntry {
   body?: string
 }
 
+export interface HttpResponseLogEntry {
+  method: string
+  url: string
+  status: number
+  statusText: string
+  /** Response duration in milliseconds */
+  durationMs: number
+  headers: Record<string, string>
+}
+
 /**
  * Log a raw outbound HTTP request.
  * No-op when logging is disabled — designed to be called unconditionally.
@@ -131,18 +141,41 @@ export function logHttpRequest(entry: HttpRequestLogEntry): void {
   httpLog.info(lines)
 }
 
-// ============================================================================
-// Self-registration — runs at module load time (imported by proxy-fetch.ts)
-// ============================================================================
+/**
+ * Log an HTTP response summary.
+ * No-op when logging is disabled.
+ */
+export function logHttpResponse(entry: HttpResponseLogEntry): void {
+  if (!_enabled) return
 
-// Read initial state from persisted config
-_enabled = getConfig().agent?.logHttpRequests ?? false
-if (_enabled) {
-  const filePath = getLogFilePath()
-  console.log(`[HttpLogger] Raw HTTP logging ENABLED at startup → ${filePath}`)
+  const statusIcon = entry.status >= 200 && entry.status < 300 ? '✓' : '✗'
+  const lines = [
+    `  ◀ ${statusIcon} ${entry.status} ${entry.statusText} (${entry.durationMs}ms) ${entry.method} ${entry.url}`,
+  ]
+
+  httpLog.info(lines.join('\n'))
 }
 
-// Keep in sync with config changes (synchronous — set before next request)
-onAgentConfigChange((agent) => {
-  setHttpLogging(agent?.logHttpRequests ?? false)
-})
+/**
+ * Log the full response body (called asynchronously after body is fully read).
+ * For SSE streams, this logs all events concatenated.
+ * Truncates to MAX_BODY_LOG_SIZE to prevent log bloat.
+ */
+const MAX_BODY_LOG_SIZE = 32 * 1024 // 32KB
+
+export function logHttpResponseBody(method: string, url: string, body: string): void {
+  if (!_enabled) return
+
+  const truncated = body.length > MAX_BODY_LOG_SIZE
+    ? body.slice(0, MAX_BODY_LOG_SIZE) + `\n…(truncated, total ${body.length} bytes)`
+    : body
+
+  const lines = [
+    `  ◀◀ Response Body: ${method} ${url}`,
+    '  ' + prettyBody(truncated).split('\n').join('\n  '),
+  ]
+
+  httpLog.info(lines.join('\n'))
+}
+
+// Note: No self-registration. Lifecycle is managed by developer-mode.ts.

@@ -414,6 +414,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       `promptLen=${systemPrompt.length}, maxTurns=${MAX_TURNS}, ` +
       `mcpServers=[${mcpServerNames.join(', ')}], aiBrowser=${usesAIBrowser}, email=${usesEmail}`
     )
+    console.debug(`[Runtime][${runTag}] SDK options: model=${sdkOptions.model}, allowedTools=${(sdkOptions.allowedTools || []).length}, disallowedTools=${(sdkOptions.disallowedTools || []).length}, maxThinkingTokens=${sdkOptions.maxThinkingTokens}`)
 
     // Session creation strategy:
     //   escalation_followup / continue_followup → restore existing session via

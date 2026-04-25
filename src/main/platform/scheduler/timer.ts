@@ -243,6 +243,7 @@ export class SchedulerTimer {
 
       // Find due jobs
       const dueJobs = this.findDueJobs(now)
+      console.debug(`[Scheduler] Tick: ${dueJobs.length} due, ${this.store.getAll().filter(j => j.enabled).length} enabled total`)
 
       if (dueJobs.length === 0) {
         // No due jobs, but do maintenance recompute for any that need it
@@ -295,6 +296,7 @@ export class SchedulerTimer {
     }
 
     const startedAt = this.nowFn()
+    console.debug(`[Scheduler] Executing job "${job.name}" (${job.id}), schedule=${JSON.stringify(job.schedule)}, consecutiveErrors=${job.consecutiveErrors}`)
 
     // Mark as running
     job.runningAtMs = startedAt
@@ -318,6 +320,7 @@ export class SchedulerTimer {
 
     const finishedAt = this.nowFn()
     const durationMs = Math.max(0, finishedAt - startedAt)
+    console.debug(`[Scheduler] Job "${job.name}" (${job.id}) finished: outcome=${outcome}, duration=${durationMs}ms${errorMessage ? `, error=${errorMessage}` : ''}`)
 
     // Record run log
     this.store.insertRunLog({

@@ -73,7 +73,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
     config?.agent?.disabledTools ?? DEFAULT_DISABLED_TOOLS
   )
-  const [logHttpRequests, setLogHttpRequestsState] = useState(config?.agent?.logHttpRequests ?? false)
+  const [developerMode, setDeveloperModeState] = useState(config?.agent?.developerMode ?? false)
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -143,13 +143,13 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     }
   }
 
-  const handleLogHttpRequestsChange = async (enabled: boolean) => {
-    setLogHttpRequestsState(enabled)
+  const handleDeveloperModeChange = async (enabled: boolean) => {
+    setDeveloperModeState(enabled)
     try {
-      await saveAgentConfig({ logHttpRequests: enabled })
+      await saveAgentConfig({ developerMode: enabled })
     } catch (error) {
-      console.error('[AdvancedSection] Failed to update logHttpRequests:', error)
-      setLogHttpRequestsState(config?.agent?.logHttpRequests ?? false)
+      console.error('[AdvancedSection] Failed to update developerMode:', error)
+      setDeveloperModeState(config?.agent?.developerMode ?? false)
     }
   }
 
@@ -301,26 +301,26 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
           />
         </div>
 
-        {/* HTTP Request Logging */}
+        {/* Developer Mode */}
         <div className="flex items-start justify-between pt-4 border-t border-border">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <Terminal className="w-4 h-4 text-muted-foreground shrink-0" />
-              <p className="font-medium">{t('HTTP Request Logging')}</p>
+              <p className="font-medium">{t('Developer Mode')}</p>
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shrink-0">
                 {t('Dev')}
               </span>
             </div>
             <p className="text-sm text-muted-foreground">
-              {t('Log all raw outbound HTTP requests (including headers and body) to')}{' '}
-              <code className="text-xs font-mono bg-muted px-1 py-0.5 rounded">http-raw.log</code>
-              {'. '}
-              {t('Useful for inspecting exact LLM API payloads. Disable when not needed.')}
+              {t('Enable verbose logging for troubleshooting: HTTP request payloads, session lifecycle, stream events, and scheduler diagnostics.')}
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+              {t('Generates large log files and may affect performance. Disable after troubleshooting.')}
             </p>
           </div>
           <Switch
-            checked={logHttpRequests}
-            onCheckedChange={handleLogHttpRequestsChange}
+            checked={developerMode}
+            onCheckedChange={handleDeveloperModeChange}
             size="sm"
             className="ml-4 mt-0.5"
           />

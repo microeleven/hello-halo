@@ -31,7 +31,7 @@ import http from 'node:http'
 import zlib from 'node:zlib'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from './config.service'
-import { isHttpLoggingEnabled, logHttpRequest } from './http-logger'
+import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from './http-logger'
 
 // ============================================================================
 // Preserve originals before any global patching
@@ -368,9 +368,10 @@ export async function proxyFetch(
   }
 
   const method = (init?.method || 'GET').toUpperCase()
+  const logging = isHttpLoggingEnabled()
 
   // Developer HTTP logging — no-op when disabled (isHttpLoggingEnabled is O(1))
-  if (isHttpLoggingEnabled()) {
+  if (logging) {
     logHttpRequest({
       method,
       url: urlStr,
@@ -379,14 +380,43 @@ export async function proxyFetch(
     })
   }
 
+  const startTime = logging ? Date.now() : 0
+  let response: Response
+
   if (!proxyUrl) {
     console.log(`[ProxyFetch] DIRECT ${method} ${urlStr}`)
-    return _originalFetch(url, init)
+    response = await _originalFetch(url, init)
+  } else {
+    console.log(`[ProxyFetch] VIA ${proxyUrl} → ${method} ${urlStr}`)
+    const agent = getOrCreateAgent(proxyUrl)
+    response = await makeRequest(urlStr, init, agent)
   }
 
-  console.log(`[ProxyFetch] VIA ${proxyUrl} → ${method} ${urlStr}`)
-  const agent = getOrCreateAgent(proxyUrl)
-  return makeRequest(urlStr, init, agent)
+  // Log response summary (status, duration)
+  if (logging) {
+    const durationMs = Date.now() - startTime
+    const resHeaders: Record<string, string> = {}
+    response.headers.forEach((v, k) => { resHeaders[k] = v })
+
+    logHttpResponse({
+      method,
+      url: urlStr,
+      status: response.status,
+      statusText: response.statusText,
+      durationMs,
+      headers: resHeaders,
+    })
+
+    // Fire-and-forget: clone response and read body asynchronously.
+    // Does not block the return — consumer gets the response immediately.
+    // For SSE streams, logs the full concatenated body when stream ends.
+    const cloned = response.clone()
+    cloned.text()
+      .then(body => logHttpResponseBody(method, urlStr, body))
+      .catch(() => { /* non-fatal — body may be unreadable */ })
+  }
+
+  return response
 }
 
 /**

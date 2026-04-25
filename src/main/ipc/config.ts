@@ -52,6 +52,7 @@ export function registerConfigHandlers(): void {
   ipcMain.handle('config:set', async (_event, updates: Record<string, unknown>) => {
     // Log what's being updated (without sensitive data)
     const updateKeys = Object.keys(updates)
+    console.debug('[IPC] config:set keys:', updateKeys.join(', '), updates.agent ? `agent=${JSON.stringify(updates.agent)}` : '')
     const incomingAiSources = (updates.aiSources as AISourcesConfig | undefined)
     const aiSourcesCurrentId = incomingAiSources?.currentId
     console.log('[Settings] config:set - Saving:', updateKeys.join(', '), aiSourcesCurrentId ? `(currentId: ${aiSourcesCurrentId})` : '')

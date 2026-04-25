@@ -75,6 +75,10 @@ log.errorHandler.startCatching({
 // Replace global console with electron-log (performance: direct replacement, no wrapper)
 Object.assign(console, log.functions)
 
+// Developer Mode: subscribe to config changes and control log level.
+// Must load after console replacement so its initial log calls go through electron-log.
+import './services/developer-mode'
+
 // Fix PATH for macOS GUI apps
 // GUI apps don't inherit shell environment variables (.zshrc, .bash_profile, etc.)
 // This ensures tools like git, node, npm are discoverable

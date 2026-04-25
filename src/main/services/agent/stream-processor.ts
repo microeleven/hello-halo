@@ -16,6 +16,7 @@
 
 import { is } from '@electron-toolkit/utils'
 import { jsonrepair } from 'jsonrepair'
+import { isDeveloperMode } from '../developer-mode'
 import type {
   Thought,
   ToolCall,
@@ -356,19 +357,15 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       if (!event) continue
 
       // DEBUG: Log all stream events with timestamp (ms since send)
-      const elapsed = Date.now() - t1
-      // For message_start, log the full event to see if it contains content structure hints
-      if (event.type === 'message_start') {
-        if (is.dev) {
-          console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms message_start FULL:`, JSON.stringify(event))
+      // Uses console.debug — only written to file when Developer Mode is enabled.
+      // Guard JSON.stringify with isDeveloperMode() to avoid compute on hot path when disabled.
+      if (isDeveloperMode()) {
+        const elapsed = Date.now() - t1
+        if (event.type === 'message_start') {
+          console.debug(`[Agent][${conversationId}] +${elapsed}ms message_start:`, JSON.stringify(event))
+        } else {
+          console.debug(`[Agent][${conversationId}] +${elapsed}ms stream_event: type=${event.type}, index=${event.index}`)
         }
-      } else {
-        // console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms stream_event:`, JSON.stringify({
-        //   type: event.type,
-        //   index: event.index,
-        //   content_block: event.content_block,
-        //   delta: event.delta
-        // }))
       }
 
       // Text block started

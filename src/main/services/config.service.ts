@@ -454,8 +454,8 @@ interface HaloConfig {
     enableTeams?: boolean
     /** Tools disabled by user (Extended Capabilities toggles) */
     disabledTools?: string[]
-    /** Developer: log raw outbound HTTP requests to http-raw.log */
-    logHttpRequests?: boolean
+    /** Developer: enable verbose diagnostic logging (HTTP payloads, session lifecycle, stream events, scheduler) */
+    developerMode?: boolean
   }
   remoteAccess: {
     enabled: boolean
