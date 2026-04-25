@@ -98,11 +98,19 @@ const openRouterAdapter: ProviderAdapter = {
 // ============================================================================
 
 /**
- * DeepSeek R1 models return reasoning in `reasoning_content` field
+ * DeepSeek V4 adapter
  *
- * Note: The actual reasoning_content handling is done in the stream handler
- * (openai-chat-stream.ts) since it's a response transformation.
- * This adapter is here for documentation and potential future request transforms.
+ * DeepSeek V4 (deepseek-reasoner / thinking mode) rejects requests that include
+ * `reasoning_content` in assistant messages unless the current request also has
+ * thinking mode explicitly enabled. The router converter
+ * (converters/messages.ts) unconditionally adds `reasoning_content` to
+ * assistant messages when thinking blocks are present (originally for Moonshot).
+ * This adapter strips that field before the request reaches DeepSeek so that
+ * multi-turn conversations with prior thinking turns don't produce 400 errors.
+ *
+ * Official error: "reasoning_content in the thinking mode must be passed back
+ * to the API" — emitted when `reasoning_content` is present but thinking mode
+ * is not active on the current request.
  *
  * @see https://api-docs.deepseek.com/
  */
@@ -112,10 +120,26 @@ const deepSeekAdapter: ProviderAdapter = {
 
   match(url: string): boolean {
     return url.includes('api.deepseek.com')
-  }
+  },
 
-  // No request transformation needed
-  // Response handling is in openai-chat-stream.ts (delta.reasoning_content)
+  transformRequest(body: Record<string, unknown>): void {
+    // Strip reasoning_content from all assistant messages.
+    // DeepSeek V4 rejects requests that carry reasoning_content in messages
+    // when thinking mode is not active in the current request.
+    const messages = body.messages
+    if (!Array.isArray(messages)) return
+
+    for (const msg of messages) {
+      if (
+        msg &&
+        typeof msg === 'object' &&
+        (msg as Record<string, unknown>).role === 'assistant' &&
+        'reasoning_content' in (msg as Record<string, unknown>)
+      ) {
+        delete (msg as Record<string, unknown>).reasoning_content
+      }
+    }
+  }
 }
 
 // ============================================================================
