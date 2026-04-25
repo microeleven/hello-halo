@@ -157,22 +157,12 @@ export function convertAnthropicMessagesToOpenAIChat(
       const text = extractTextFromAnthropicBlocks(blocks)
       const toolUseBlocks = extractToolUseBlocks(blocks)
 
-      // Extract thinking blocks for reasoning_content (required by some providers like Moonshot)
-      const thinkingBlocks = blocks.filter((b) => b.type === 'thinking')
-      const thinkingContent = thinkingBlocks
-        .map((b) => (b as any).thinking)
-        .filter(Boolean)
-        .join('\n')
-
+      // Thinking blocks are intentionally omitted here — they are not part of the
+      // OpenAI Chat Completions spec. Providers that require reasoning_content
+      // (e.g. Moonshot) inject it via their own ProviderAdapter.transformRequest.
       const assistantMessage: OpenAIChatAssistantMessage = {
         role: 'assistant',
         content: text || null // OpenAI expects null for pure tool_calls
-      }
-
-      // Add reasoning_content if thinking blocks exist
-      // This is required by providers like Moonshot when reasoning is enabled
-      if (thinkingContent) {
-        (assistantMessage as any).reasoning_content = thinkingContent
       }
 
       if (toolUseBlocks.length > 0) {

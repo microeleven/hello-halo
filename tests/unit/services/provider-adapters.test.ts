@@ -3,7 +3,30 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { findAdapter, deepSeekAdapter, groqAdapter, openRouterAdapter } from '../../../src/main/openai-compat-router/server/provider-adapters'
+import {
+  findAdapter,
+  deepSeekAdapter,
+  groqAdapter,
+  openRouterAdapter,
+  moonshotAdapter,
+  zhipuAdapter
+} from '../../../src/main/openai-compat-router/server/provider-adapters'
+import type { AdapterContext } from '../../../src/main/openai-compat-router/server/provider-adapters'
+import type { AnthropicRequest } from '../../../src/main/openai-compat-router/types'
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function makeContext(messages: AnthropicRequest['messages']): AdapterContext {
+  return {
+    originalRequest: {
+      model: 'test-model',
+      messages,
+      max_tokens: 1024
+    } as AnthropicRequest
+  }
+}
 
 // ============================================================================
 // DeepSeek Adapter
@@ -22,44 +45,63 @@ describe('deepSeekAdapter', () => {
     })
   })
 
-  describe('transformRequest — strips reasoning_content', () => {
-    it('removes reasoning_content from assistant messages', () => {
+  it('has no transformRequest — converter produces spec-compliant output by default', () => {
+    expect(deepSeekAdapter.transformRequest).toBeUndefined()
+  })
+})
+
+// ============================================================================
+// Moonshot Adapter
+// ============================================================================
+
+describe('moonshotAdapter', () => {
+  describe('match', () => {
+    it('matches api.moonshot.cn URLs', () => {
+      expect(moonshotAdapter.match('https://api.moonshot.cn/v1')).toBe(true)
+      expect(moonshotAdapter.match('https://api.moonshot.cn/v1/chat/completions')).toBe(true)
+    })
+
+    it('matches api.moonshot.ai URLs', () => {
+      expect(moonshotAdapter.match('https://api.moonshot.ai/v1')).toBe(true)
+    })
+
+    it('does not match other URLs', () => {
+      expect(moonshotAdapter.match('https://api.deepseek.com/v1')).toBe(false)
+      expect(moonshotAdapter.match('https://api.openai.com/v1')).toBe(false)
+    })
+  })
+
+  describe('transformRequest — injects reasoning_content from thinking blocks', () => {
+    it('adds reasoning_content to assistant messages that have thinking blocks', () => {
       const body: Record<string, unknown> = {
-        model: 'deepseek-reasoner',
+        model: 'moonshot-v1-128k',
         messages: [
           { role: 'user', content: 'Hello' },
-          {
-            role: 'assistant',
-            content: 'Hi there',
-            reasoning_content: 'The user said hello, I should respond politely.'
-          },
+          { role: 'assistant', content: 'Hi there' },
           { role: 'user', content: 'How are you?' }
         ]
       }
 
-      deepSeekAdapter.transformRequest!(body)
+      const context = makeContext([
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'The user greeted me, I should respond warmly.' },
+            { type: 'text', text: 'Hi there' }
+          ]
+        },
+        { role: 'user', content: 'How are you?' }
+      ])
+
+      moonshotAdapter.transformRequest!(body, context)
 
       const messages = body.messages as Array<Record<string, unknown>>
-      expect(messages[1]).not.toHaveProperty('reasoning_content')
+      expect(messages[1]).toHaveProperty('reasoning_content', 'The user greeted me, I should respond warmly.')
       expect(messages[1].content).toBe('Hi there')
-      expect(messages[1].role).toBe('assistant')
     })
 
-    it('does not remove reasoning_content from non-assistant messages', () => {
-      const body: Record<string, unknown> = {
-        messages: [
-          { role: 'user', content: 'Hello', reasoning_content: 'should be kept' }
-        ]
-      }
-
-      deepSeekAdapter.transformRequest!(body)
-
-      const messages = body.messages as Array<Record<string, unknown>>
-      // user messages are left untouched
-      expect(messages[0]).toHaveProperty('reasoning_content', 'should be kept')
-    })
-
-    it('handles messages with no reasoning_content gracefully', () => {
+    it('does not add reasoning_content when assistant has no thinking blocks', () => {
       const body: Record<string, unknown> = {
         messages: [
           { role: 'user', content: 'Hello' },
@@ -67,36 +109,195 @@ describe('deepSeekAdapter', () => {
         ]
       }
 
-      expect(() => deepSeekAdapter.transformRequest!(body)).not.toThrow()
+      const context = makeContext([
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Hi' }] }
+      ])
+
+      moonshotAdapter.transformRequest!(body, context)
+
       const messages = body.messages as Array<Record<string, unknown>>
-      expect(messages[1].content).toBe('Hi')
+      expect(messages[1]).not.toHaveProperty('reasoning_content')
+    })
+
+    it('handles multiple thinking turns in sequence', () => {
+      const body: Record<string, unknown> = {
+        messages: [
+          { role: 'user', content: 'Q1' },
+          { role: 'assistant', content: 'A1' },
+          { role: 'user', content: 'Q2' },
+          { role: 'assistant', content: 'A2' }
+        ]
+      }
+
+      const context = makeContext([
+        { role: 'user', content: 'Q1' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'thinking-1' },
+            { type: 'text', text: 'A1' }
+          ]
+        },
+        { role: 'user', content: 'Q2' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'thinking-2' },
+            { type: 'text', text: 'A2' }
+          ]
+        }
+      ])
+
+      moonshotAdapter.transformRequest!(body, context)
+
+      const messages = body.messages as Array<Record<string, unknown>>
+      expect(messages[1]).toHaveProperty('reasoning_content', 'thinking-1')
+      expect(messages[3]).toHaveProperty('reasoning_content', 'thinking-2')
+    })
+
+    it('joins multiple thinking blocks within one turn', () => {
+      const body: Record<string, unknown> = {
+        messages: [
+          { role: 'user', content: 'Q' },
+          { role: 'assistant', content: 'A' }
+        ]
+      }
+
+      const context = makeContext([
+        { role: 'user', content: 'Q' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'part-1' },
+            { type: 'thinking', thinking: 'part-2' },
+            { type: 'text', text: 'A' }
+          ]
+        }
+      ])
+
+      moonshotAdapter.transformRequest!(body, context)
+
+      const messages = body.messages as Array<Record<string, unknown>>
+      expect(messages[1].reasoning_content).toBe('part-1\npart-2')
+    })
+
+    it('handles missing context gracefully', () => {
+      const body: Record<string, unknown> = {
+        messages: [{ role: 'assistant', content: 'Hi' }]
+      }
+      expect(() => moonshotAdapter.transformRequest!(body, undefined)).not.toThrow()
+      const messages = body.messages as Array<Record<string, unknown>>
+      expect(messages[0]).not.toHaveProperty('reasoning_content')
     })
 
     it('handles empty messages array', () => {
       const body: Record<string, unknown> = { messages: [] }
-      expect(() => deepSeekAdapter.transformRequest!(body)).not.toThrow()
+      const context = makeContext([])
+      expect(() => moonshotAdapter.transformRequest!(body, context)).not.toThrow()
     })
 
-    it('handles missing messages field', () => {
-      const body: Record<string, unknown> = { model: 'deepseek-chat' }
-      expect(() => deepSeekAdapter.transformRequest!(body)).not.toThrow()
-    })
-
-    it('strips reasoning_content from multiple assistant turns', () => {
+    it('does not touch user messages', () => {
       const body: Record<string, unknown> = {
         messages: [
-          { role: 'user', content: 'Q1' },
-          { role: 'assistant', content: 'A1', reasoning_content: 'r1' },
-          { role: 'user', content: 'Q2' },
-          { role: 'assistant', content: 'A2', reasoning_content: 'r2' }
+          { role: 'user', content: 'Hello' },
+          { role: 'assistant', content: 'Hi' }
         ]
       }
 
-      deepSeekAdapter.transformRequest!(body)
+      const context = makeContext([
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'some thought' },
+            { type: 'text', text: 'Hi' }
+          ]
+        }
+      ])
+
+      moonshotAdapter.transformRequest!(body, context)
 
       const messages = body.messages as Array<Record<string, unknown>>
-      expect(messages[1]).not.toHaveProperty('reasoning_content')
-      expect(messages[3]).not.toHaveProperty('reasoning_content')
+      expect(messages[0]).not.toHaveProperty('reasoning_content')
+    })
+  })
+})
+
+// ============================================================================
+// Zhipu AI (GLM) Adapter
+// ============================================================================
+
+describe('zhipuAdapter', () => {
+  describe('match', () => {
+    it('matches open.bigmodel.cn URLs', () => {
+      expect(zhipuAdapter.match('https://open.bigmodel.cn/api/paas/v4')).toBe(true)
+      expect(zhipuAdapter.match('https://open.bigmodel.cn/api/paas/v4/chat/completions')).toBe(true)
+    })
+
+    it('does not match other URLs', () => {
+      expect(zhipuAdapter.match('https://api.deepseek.com/v1')).toBe(false)
+      expect(zhipuAdapter.match('https://api.moonshot.cn/v1')).toBe(false)
+    })
+  })
+
+  describe('transformRequest — injects reasoning_content from thinking blocks', () => {
+    it('adds reasoning_content to assistant messages that have thinking blocks', () => {
+      const body: Record<string, unknown> = {
+        messages: [
+          { role: 'user', content: 'Hello' },
+          { role: 'assistant', content: 'Hi' }
+        ]
+      }
+
+      const context = makeContext([
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'GLM reasoning trace.' },
+            { type: 'text', text: 'Hi' }
+          ]
+        }
+      ])
+
+      zhipuAdapter.transformRequest!(body, context)
+
+      const messages = body.messages as Array<Record<string, unknown>>
+      expect(messages[1]).toHaveProperty('reasoning_content', 'GLM reasoning trace.')
+    })
+
+    it('handles multiple turns correctly', () => {
+      const body: Record<string, unknown> = {
+        messages: [
+          { role: 'user', content: 'Q1' },
+          { role: 'assistant', content: 'A1' },
+          { role: 'user', content: 'Q2' },
+          { role: 'assistant', content: 'A2' }
+        ]
+      }
+
+      const context = makeContext([
+        { role: 'user', content: 'Q1' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 't1' }, { type: 'text', text: 'A1' }] },
+        { role: 'user', content: 'Q2' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 't2' }, { type: 'text', text: 'A2' }] }
+      ])
+
+      zhipuAdapter.transformRequest!(body, context)
+
+      const messages = body.messages as Array<Record<string, unknown>>
+      expect(messages[1]).toHaveProperty('reasoning_content', 't1')
+      expect(messages[3]).toHaveProperty('reasoning_content', 't2')
+    })
+
+    it('handles missing context gracefully', () => {
+      const body: Record<string, unknown> = {
+        messages: [{ role: 'assistant', content: 'Hi' }]
+      }
+      expect(() => zhipuAdapter.transformRequest!(body, undefined)).not.toThrow()
+      const messages = body.messages as Array<Record<string, unknown>>
+      expect(messages[0]).not.toHaveProperty('reasoning_content')
     })
   })
 })
@@ -130,9 +331,33 @@ describe('findAdapter', () => {
   })
 
   it('finds deepseek adapter by explicit adapterId', () => {
-    // adapterId takes precedence over URL
     const adapter = findAdapter('https://some-third-party.com/v1', 'deepseek')
     expect(adapter?.id).toBe('deepseek')
+  })
+
+  it('finds moonshot adapter by URL (cn)', () => {
+    const adapter = findAdapter('https://api.moonshot.cn/v1')
+    expect(adapter?.id).toBe('moonshot')
+  })
+
+  it('finds moonshot adapter by URL (ai)', () => {
+    const adapter = findAdapter('https://api.moonshot.ai/v1')
+    expect(adapter?.id).toBe('moonshot')
+  })
+
+  it('finds moonshot adapter by explicit adapterId', () => {
+    const adapter = findAdapter('https://some-third-party.com/v1', 'moonshot')
+    expect(adapter?.id).toBe('moonshot')
+  })
+
+  it('finds zhipu adapter by URL', () => {
+    const adapter = findAdapter('https://open.bigmodel.cn/api/paas/v4')
+    expect(adapter?.id).toBe('zhipu')
+  })
+
+  it('finds zhipu adapter by explicit adapterId', () => {
+    const adapter = findAdapter('https://some-proxy.com/v1', 'zhipu')
+    expect(adapter?.id).toBe('zhipu')
   })
 
   it('finds groq adapter by URL', () => {

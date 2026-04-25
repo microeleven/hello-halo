@@ -27,7 +27,7 @@ import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { withRequestQueue, generateQueueKey } from './request-queue'
 import { runInterceptors } from '../interceptors'
-import { applyProviderAdapter } from './provider-adapters'
+import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { handleKiroRequest } from '../adapters/kiro.adapter'
 import { countTokens } from '../utils/token-counter'
 
@@ -475,11 +475,13 @@ async function handleOpenAIConversion(
       const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
 
       // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
+      const adapterContext: AdapterContext = { originalRequest: requestToSend }
       const adapter = applyProviderAdapter(
         backendUrl,
         openaiRequest as Record<string, unknown>,
         requestHeaders,
-        adapterId
+        adapterId,
+        adapterContext
       )
       if (adapter) {
         console.log(`[RequestHandler] Applied provider adapter: ${adapter.name}`)
@@ -509,8 +511,8 @@ async function handleOpenAIConversion(
             ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }).request
             : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }).request
 
-          // Re-apply provider adapter to retry request (reuse same headers)
-          applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId)
+          // Re-apply provider adapter to retry request (reuse same headers and context)
+          applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
 
           upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, undefined, requestHeaders)
 

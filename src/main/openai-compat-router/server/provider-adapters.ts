@@ -8,11 +8,25 @@
  * - Single Responsibility: Each adapter handles one provider
  * - Open/Closed: Easy to add new adapters without modifying existing code
  * - Dual matching: URL-based detection (built-in providers) + adapterId (plugin providers)
+ * - Minimal by default: The converter produces a spec-compliant baseline; adapters
+ *   opt-in to extensions. No provider-specific fields leak into the shared interface.
  */
+
+import type { AnthropicMessage, AnthropicRequest } from '../types'
 
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Original request context passed to adapters.
+ * Gives adapters access to pre-conversion data (e.g. thinking blocks)
+ * without polluting the shared interface with provider-specific flags.
+ */
+export interface AdapterContext {
+  /** The original Anthropic request before any conversion */
+  readonly originalRequest: AnthropicRequest
+}
 
 export interface ProviderAdapter {
   /** Unique identifier for this adapter */
@@ -25,14 +39,15 @@ export interface ProviderAdapter {
   match(url: string): boolean
 
   /**
-   * Transform request body before sending to provider
-   * Mutates the body in place for efficiency
+   * Transform request body before sending to provider.
+   * Mutates body in place for efficiency.
+   * Use context.originalRequest to access pre-conversion data (e.g. thinking blocks).
    */
-  transformRequest?(body: Record<string, unknown>): void
+  transformRequest?(body: Record<string, unknown>, context?: AdapterContext): void
 
   /**
-   * Get additional headers to include in the request
-   * These headers are merged with existing headers (adapter headers take precedence)
+   * Get additional headers to include in the request.
+   * These headers are merged with existing headers (adapter headers take precedence).
    */
   getExtraHeaders?(): Record<string, string>
 }
@@ -98,19 +113,11 @@ const openRouterAdapter: ProviderAdapter = {
 // ============================================================================
 
 /**
- * DeepSeek V4 adapter
+ * DeepSeek adapter
  *
- * DeepSeek V4 (deepseek-reasoner / thinking mode) rejects requests that include
- * `reasoning_content` in assistant messages unless the current request also has
- * thinking mode explicitly enabled. The router converter
- * (converters/messages.ts) unconditionally adds `reasoning_content` to
- * assistant messages when thinking blocks are present (originally for Moonshot).
- * This adapter strips that field before the request reaches DeepSeek so that
- * multi-turn conversations with prior thinking turns don't produce 400 errors.
- *
- * Official error: "reasoning_content in the thinking mode must be passed back
- * to the API" — emitted when `reasoning_content` is present but thinking mode
- * is not active on the current request.
+ * DeepSeek follows the OpenAI Chat Completions spec closely.
+ * No request transformation needed — the converter produces a spec-compliant
+ * baseline that DeepSeek accepts without modification.
  *
  * @see https://api-docs.deepseek.com/
  */
@@ -120,25 +127,101 @@ const deepSeekAdapter: ProviderAdapter = {
 
   match(url: string): boolean {
     return url.includes('api.deepseek.com')
+  }
+}
+
+// ============================================================================
+// Shared helper: inject reasoning_content from thinking blocks
+// ============================================================================
+
+/**
+ * Injects `reasoning_content` into OpenAI assistant messages using the
+ * thinking blocks from the original Anthropic request.
+ *
+ * Used by providers that require `reasoning_content` to be passed back in
+ * multi-turn conversations (e.g. Moonshot, GLM). The converter omits this
+ * field by default since it is not part of the OpenAI spec.
+ *
+ * Assistant messages are always converted 1:1 from Anthropic → OpenAI, so
+ * thinking content can be applied in sequence without index alignment issues.
+ */
+function injectReasoningContent(
+  body: Record<string, unknown>,
+  context?: AdapterContext
+): void {
+  const messages = body.messages
+  if (!Array.isArray(messages) || !context?.originalRequest?.messages) return
+
+  const thinkingByAssistantTurn: string[] = []
+  for (const msg of context.originalRequest.messages as AnthropicMessage[]) {
+    if (msg.role !== 'assistant') continue
+    if (!Array.isArray(msg.content)) { thinkingByAssistantTurn.push(''); continue }
+    const thinking = msg.content
+      .filter((b: any) => b.type === 'thinking' && b.thinking)
+      .map((b: any) => b.thinking as string)
+      .join('\n')
+    thinkingByAssistantTurn.push(thinking)
+  }
+
+  let assistantIdx = 0
+  for (const msg of messages) {
+    if (!msg || typeof msg !== 'object') continue
+    if ((msg as Record<string, unknown>).role !== 'assistant') continue
+    const thinking = thinkingByAssistantTurn[assistantIdx++]
+    if (thinking) {
+      (msg as Record<string, unknown>).reasoning_content = thinking
+    }
+  }
+}
+
+// ============================================================================
+// Moonshot Adapter
+// ============================================================================
+
+/**
+ * Moonshot (Kimi) adapter
+ *
+ * Requires `reasoning_content` in assistant messages for multi-turn reasoning.
+ *
+ * @see https://platform.moonshot.cn/docs
+ */
+const moonshotAdapter: ProviderAdapter = {
+  id: 'moonshot',
+  name: 'Moonshot',
+
+  match(url: string): boolean {
+    return url.includes('api.moonshot.cn') || url.includes('api.moonshot.ai')
   },
 
-  transformRequest(body: Record<string, unknown>): void {
-    // Strip reasoning_content from all assistant messages.
-    // DeepSeek V4 rejects requests that carry reasoning_content in messages
-    // when thinking mode is not active in the current request.
-    const messages = body.messages
-    if (!Array.isArray(messages)) return
+  transformRequest(body: Record<string, unknown>, context?: AdapterContext): void {
+    injectReasoningContent(body, context)
+  }
+}
 
-    for (const msg of messages) {
-      if (
-        msg &&
-        typeof msg === 'object' &&
-        (msg as Record<string, unknown>).role === 'assistant' &&
-        'reasoning_content' in (msg as Record<string, unknown>)
-      ) {
-        delete (msg as Record<string, unknown>).reasoning_content
-      }
-    }
+// ============================================================================
+// Zhipu AI (GLM) Adapter
+// ============================================================================
+
+/**
+ * Zhipu AI (GLM) adapter
+ *
+ * GLM thinking models (GLM-Z1, GLM-4.7-Think, GLM-5-Think) require
+ * `reasoning_content` in assistant messages for multi-turn reasoning,
+ * with the same semantics as Moonshot. Official docs explicitly state the
+ * field must be preserved verbatim to maintain reasoning coherence.
+ *
+ * @see https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode
+ */
+const zhipuAdapter: ProviderAdapter = {
+  id: 'zhipu',
+  name: 'Zhipu AI (GLM)',
+
+  match(url: string): boolean {
+    return url.includes('open.bigmodel.cn')
+  },
+
+  transformRequest(body: Record<string, unknown>, context?: AdapterContext): void {
+    injectReasoningContent(body, context)
   }
 }
 
@@ -203,6 +286,8 @@ const adapters: readonly ProviderAdapter[] = [
   groqAdapter,
   openRouterAdapter,
   deepSeekAdapter,
+  moonshotAdapter,
+  zhipuAdapter,
   tencentAdapter
 ]
 
@@ -228,13 +313,15 @@ export function findAdapter(url: string, adapterId?: string): ProviderAdapter | 
  * @param body - Request body (will be mutated if adapter has transformRequest)
  * @param headers - Request headers (adapter headers will be merged)
  * @param adapterId - Explicit adapter ID from provider config (takes priority over URL matching)
+ * @param context - Original request context; gives adapters access to pre-conversion data
  * @returns The adapter that was applied, or undefined if none matched
  */
 export function applyProviderAdapter(
   url: string,
   body: Record<string, unknown>,
   headers: Record<string, string>,
-  adapterId?: string
+  adapterId?: string,
+  context?: AdapterContext
 ): ProviderAdapter | undefined {
   const adapter = findAdapter(url, adapterId)
 
@@ -244,7 +331,7 @@ export function applyProviderAdapter(
 
   // Apply request transformation
   if (adapter.transformRequest) {
-    adapter.transformRequest(body)
+    adapter.transformRequest(body, context)
   }
 
   // Merge extra headers (adapter headers take precedence)
@@ -260,4 +347,4 @@ export function applyProviderAdapter(
 // Exports
 // ============================================================================
 
-export { groqAdapter, openRouterAdapter, deepSeekAdapter, tencentAdapter }
+export { groqAdapter, openRouterAdapter, deepSeekAdapter, moonshotAdapter, zhipuAdapter, tencentAdapter }
