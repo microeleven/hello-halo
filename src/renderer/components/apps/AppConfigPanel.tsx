@@ -213,10 +213,17 @@ function SettingsTab({ app, appId, spaceName, t }: SettingsTabProps) {
 
   // Check if email notification channel is configured
   const [emailConfigured, setEmailConfigured] = useState(false)
+  // Check if any IM channel instances are enabled (for im-push toggle gating)
+  const [hasImInstances, setHasImInstances] = useState(false)
   useEffect(() => {
     api.getConfig().then((res: any) => {
       if (res.success && res.data) {
         setEmailConfigured(Boolean(res.data.notificationChannels?.email?.enabled))
+      }
+    }).catch(() => {})
+    api.imChannelsStatus().then((res: any) => {
+      if (res.success && res.data) {
+        setHasImInstances(res.data.some((s: any) => s.enabled))
       }
     }).catch(() => {})
   }, [])
@@ -226,8 +233,6 @@ function SettingsTab({ app, appId, spaceName, t }: SettingsTabProps) {
   const specSystemPromptValue = isAutomation ? app.spec.system_prompt : ''
   const specSubscriptions = isAutomation ? (app.spec.subscriptions ?? []) : []
   const specRecommendedModel = isAutomation ? app.spec.recommended_model : undefined
-  const specNotifyChannels = isAutomation ? (app.spec.output?.notify?.channels ?? []) : []
-
   // ── Spec fields (name, description, system_prompt) ──
   const [specName, setSpecName] = useState(app.spec.name)
   const [specDescription, setSpecDescription] = useState(app.spec.description)
@@ -508,6 +513,55 @@ function SettingsTab({ app, appId, spaceName, t }: SettingsTabProps) {
           </p>
         )}
 
+        {/* IM Push toggle */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <Send className={`w-3.5 h-3.5 ${hasImInstances ? 'text-muted-foreground' : 'text-muted-foreground/50'}`} />
+              <span className={`text-sm ${hasImInstances ? 'text-foreground' : 'text-muted-foreground'}`}>{t('IM Push')}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t('Allow this app to send messages to IM contacts')}
+            </p>
+          </div>
+          <Switch
+            checked={hasImInstances && resolvePermission(app, 'im-push', false)}
+            onCheckedChange={async (checked) => {
+              if (!hasImInstances) return
+              if (checked) {
+                await grantPermission(appId, 'im-push')
+              } else {
+                await revokePermission(appId, 'im-push')
+              }
+            }}
+            disabled={!hasImInstances}
+            size="sm"
+          />
+        </div>
+        {/* Not configured: show hint with link to settings */}
+        {!hasImInstances && (
+          <button
+            onClick={() => {
+              setView('settings')
+              setTimeout(() => {
+                const el = document.getElementById('message-channels')
+                el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }, 100)
+            }}
+            className="text-xs text-amber-500 flex items-center gap-1 -mt-2 hover:text-amber-400 transition-colors"
+          >
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+            {t('No IM channels configured. Go to Settings to set up.')}
+          </button>
+        )}
+        {/* Warn when user disabled a permission the spec declares */}
+        {hasImInstances && !resolvePermission(app, 'im-push', false) && app.spec.permissions?.includes('im-push') && (
+          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+            {t('This app may require IM Push to work properly')}
+          </p>
+        )}
+
         {/* Browser login sites */}
         {browserLoginEntries.length > 0 && (
           <div className="space-y-2">
@@ -582,12 +636,12 @@ function SettingsTab({ app, appId, spaceName, t }: SettingsTabProps) {
             {t('Message Channels')}
           </h3>
           <p className="text-xs text-muted-foreground -mt-2">
-            {t('Select channels for this digital human to send notifications through')}
+            {t('Notification channels and contacts available to this digital human')}
           </p>
           <AppNotifyChannelsSection
             appId={appId}
-            selectedChannels={specNotifyChannels}
             appName={app.spec.name}
+            imPushEnabled={resolvePermission(app, 'im-push', false)}
           />
         </div>
       )}

@@ -13,6 +13,7 @@
  */
 
 import { join } from 'path'
+import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { createSession } from '../../services/agent/resolved-sdk'
 import type { InstalledApp } from '../manager'
@@ -32,6 +33,8 @@ import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer } from './report-tool'
 import type { ReportToolContext } from './report-tool'
 import { createNotifyToolServer } from './notify-tool'
+import { FileExportGate } from './file-export-gate'
+import { getImSessionRegistry } from './im-session-registry'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
@@ -249,6 +252,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const memoryInstructions = memory.getPromptInstructions()
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
     const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
+    const usesImPush = resolvePermission(app, 'im-push', false) // default false — AI-driven IM push
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -336,7 +340,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       runId,
       sessionKey,
       notificationLevel: app.userOverrides.notificationLevel,
-      notifyChannels: app.spec.output?.notify?.channels,
       plansDir,
     }
 
@@ -350,11 +353,19 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       emitEntry
     )
 
-    // Create halo-notify MCP server for AI autonomous notifications
+    // Create halo-notify MCP server for AI-driven notifications
+    // FileExportGate restricts outbound file sends to space directory + tmpdir
+    const exportGate = new FileExportGate([memoryScope.spacePath, tmpdir()])
+    const imSessions = usesImPush
+      ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
+      : []
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
       appName: app.spec.name,
       runId,
+      imSessions,
+      usesImPush,
+      exportGate,
     })
 
     // ── 5. Create V2 session ───────────────────────────────

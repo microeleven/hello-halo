@@ -1,35 +1,33 @@
 /**
- * AppNotifyChannelsSection (数字人通知方式)
+ * AppNotifyChannelsSection (通知能力概览 + 联系人管理)
  *
- * Visual channel selector for digital human configuration.
- * Shows all available message channels with their configuration status:
+ * Two subsections:
  *
- * - Configured channels: checkbox to enable/disable for this app
- * - Unconfigured channels: grayed out with "Go to Settings" link
- * - Bidirectional channels (e.g. WeCom Bot): expand to show IM sessions
- *   with proactive push toggles
+ * A. Notification Channel Overview (read-only)
+ *    Shows which external channels are configured, with status indicators.
+ *    No toggle — external channel notifications are now AI-driven.
+ *    Links to Settings for configuration.
  *
- * One-way channels write to `output.notify.channels` in the app spec.
- * Bidirectional channels use IM session proactive push (managed inline).
+ * B. Reachable Contacts (when im-push enabled)
+ *    Shows IM sessions for this app with editable display names.
+ *    These contacts appear in the AI's notify_bot tool directory.
+ *    Contacts are auto-discovered when users message via Bot.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook,
-  ExternalLink, ChevronDown,
+  ExternalLink, Users, User, Pencil, Trash2, Copy, Check,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
-import { useAppsStore } from '../../stores/apps.store'
 import { api } from '../../api'
-import { ImSessionsSection } from '../settings/ImSessionsSection'
 import type { HaloConfig } from '../../types'
 import type {
-  NotificationChannelType,
   NotificationChannelsConfig,
 } from '../../../shared/types/notification-channels'
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
-import type { ImChannelInstanceStatus } from '../../../shared/types/im-channel'
+import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 
 // ============================================
 // Types
@@ -37,242 +35,323 @@ import type { ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 
 interface AppNotifyChannelsSectionProps {
   appId: string
-  /** Current selected channels from app spec output.notify.channels */
-  selectedChannels: NotificationChannelType[]
-  /** App name for IM sessions display */
+  /** App name for display */
   appName?: string
+  /** Whether im-push permission is enabled for this app */
+  imPushEnabled: boolean
 }
 
-/** Channel display definition */
-interface ChannelInfo {
+// ============================================
+// Channel Display Config
+// ============================================
+
+interface ChannelDisplayInfo {
   id: string
-  notifyType?: NotificationChannelType
   icon: typeof Mail
   labelKey: string
-  direction: 'one-way' | 'bidirectional'
 }
 
-// ============================================
-// Channel Registry
-// ============================================
-
-const ALL_CHANNELS: ChannelInfo[] = [
-  {
-    id: 'wecom-bot',
-    icon: MessageSquare,
-    labelKey: 'WeCom Intelligent Bot',
-    direction: 'bidirectional',
-  },
-  {
-    id: 'email',
-    notifyType: 'email',
-    icon: Mail,
-    labelKey: NOTIFICATION_CHANNEL_META.email.labelKey,
-    direction: 'one-way',
-  },
-  {
-    id: 'wecom',
-    notifyType: 'wecom',
-    icon: MessageSquare,
-    labelKey: NOTIFICATION_CHANNEL_META.wecom.labelKey,
-    direction: 'one-way',
-  },
-  {
-    id: 'dingtalk',
-    notifyType: 'dingtalk',
-    icon: Bell,
-    labelKey: NOTIFICATION_CHANNEL_META.dingtalk.labelKey,
-    direction: 'one-way',
-  },
-  {
-    id: 'feishu',
-    notifyType: 'feishu',
-    icon: MessageSquare,
-    labelKey: NOTIFICATION_CHANNEL_META.feishu.labelKey,
-    direction: 'one-way',
-  },
-  {
-    id: 'webhook',
-    notifyType: 'webhook',
-    icon: Webhook,
-    labelKey: NOTIFICATION_CHANNEL_META.webhook.labelKey,
-    direction: 'one-way',
-  },
+const NOTIFICATION_CHANNELS: ChannelDisplayInfo[] = [
+  { id: 'email', icon: Mail, labelKey: NOTIFICATION_CHANNEL_META.email.labelKey },
+  { id: 'wecom', icon: MessageSquare, labelKey: NOTIFICATION_CHANNEL_META.wecom.labelKey },
+  { id: 'dingtalk', icon: Bell, labelKey: NOTIFICATION_CHANNEL_META.dingtalk.labelKey },
+  { id: 'feishu', icon: MessageSquare, labelKey: NOTIFICATION_CHANNEL_META.feishu.labelKey },
+  { id: 'webhook', icon: Webhook, labelKey: NOTIFICATION_CHANNEL_META.webhook.labelKey },
 ]
 
-// ============================================
-// Helpers
-// ============================================
-
-interface ChannelStatus {
-  configured: boolean
-  connected?: boolean // only for bidirectional
+const IM_CHANNEL_DISPLAY: Record<string, { label: string; color: string }> = {
+  'wecom-bot': { label: 'WeCom', color: 'text-green-500' },
+  'feishu-bot': { label: 'Feishu', color: 'text-blue-500' },
+  'dingtalk-bot': { label: 'DingTalk', color: 'text-indigo-500' },
+  'weixin-ilink-bot': { label: 'WeChat iLink', color: 'text-green-600' },
 }
 
-function getChannelStatuses(
-  config: HaloConfig | null,
-  imStatuses: ImChannelInstanceStatus[],
-): Record<string, ChannelStatus> {
-  const statuses: Record<string, ChannelStatus> = {}
+function getImChannelDisplay(channel: string) {
+  return IM_CHANNEL_DISPLAY[channel] ?? { label: channel, color: 'text-muted-foreground' }
+}
 
-  // Bidirectional IM channels — derive from runtime instance statuses
-  // This supports multi-instance: configured = any enabled instance exists,
-  // connected = any instance is connected.
-  for (const ch of ALL_CHANNELS) {
-    if (ch.direction === 'bidirectional') {
-      const instances = imStatuses.filter(s => s.type === ch.id)
-      const anyEnabled = instances.some(s => s.enabled)
-      const anyConnected = instances.some(s => s.connected)
-      statuses[ch.id] = {
-        configured: anyEnabled,
-        connected: anyEnabled ? anyConnected : undefined,
-      }
-    }
+function formatTime(ts: number): string {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+
+  if (diffDays === 0) {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   }
-
-  // One-way notification channels — from global config
-  const channels = config?.notificationChannels as NotificationChannelsConfig | undefined
-  for (const ch of ALL_CHANNELS) {
-    if (ch.notifyType && channels) {
-      const raw = channels[ch.notifyType] as { enabled?: boolean } | undefined
-      statuses[ch.id] = { configured: Boolean(raw?.enabled) }
-    }
-  }
-
-  return statuses
+  if (diffDays === 1) return '1d ago'
+  if (diffDays < 30) return `${diffDays}d ago`
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 // ============================================
-// Channel Row
+// Channel Overview (read-only)
 // ============================================
 
-interface ChannelRowProps {
-  channel: ChannelInfo
-  status: ChannelStatus
-  checked: boolean
-  onToggle: () => void
-  onGoToSettings: () => void
-  /** For bidirectional channels: whether IM sessions are expanded */
-  expanded?: boolean
-  onToggleExpand?: () => void
-  children?: React.ReactNode
-}
-
-function ChannelRow({
-  channel,
-  status,
-  checked,
-  onToggle,
-  onGoToSettings,
-  expanded,
-  onToggleExpand,
-  children,
-}: ChannelRowProps) {
+function ChannelOverview() {
   const { t } = useTranslation()
-  const Icon = channel.icon
-  const isBidirectional = channel.direction === 'bidirectional'
+  const { setView } = useAppStore()
+  const [config, setConfig] = useState<HaloConfig | null>(null)
 
-  if (!status.configured) {
-    // Unconfigured: grayed out with "Go to Settings" link
+  useEffect(() => {
+    let cancelled = false
+    api.getConfig().then((res: any) => {
+      if (!cancelled && res.success && res.data) setConfig(res.data)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const channels = config?.notificationChannels as NotificationChannelsConfig | undefined
+
+  const handleGoToSettings = useCallback(() => {
+    setView('settings')
+    setTimeout(() => {
+      const el = document.getElementById('message-channels')
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+  }, [setView])
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        {t('AI-driven: the digital human decides when and what to notify via configured channels.')}
+      </p>
+      <div className="space-y-1">
+        {NOTIFICATION_CHANNELS.map((ch) => {
+          const Icon = ch.icon
+          const channelConfig = channels?.[ch.id as keyof NotificationChannelsConfig] as { enabled?: boolean } | undefined
+          const configured = Boolean(channelConfig?.enabled)
+
+          return (
+            <div
+              key={ch.id}
+              className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md"
+            >
+              <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${configured ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
+              <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${configured ? 'text-muted-foreground' : 'text-muted-foreground/40'}`} />
+              <span className={`text-sm flex-1 ${configured ? 'text-foreground' : 'text-muted-foreground/60'}`}>
+                {t(ch.labelKey)}
+              </span>
+              <span className={`text-xs ${configured ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground/50'}`}>
+                {configured ? t('Configured') : t('Not configured')}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={handleGoToSettings}
+        className="text-xs text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
+      >
+        {t('Configure channels in Settings')}
+        <ExternalLink className="w-3 h-3" />
+      </button>
+    </div>
+  )
+}
+
+// ============================================
+// Contacts Section (when im-push enabled)
+// ============================================
+
+function ContactsSection({ appId }: { appId: string }) {
+  const { t } = useTranslation()
+  const [sessions, setSessions] = useState<ImSessionRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  const fetchSessions = useCallback(async () => {
+    try {
+      const result = await api.imSessionsList(appId) as { success: boolean; data?: ImSessionRecord[] }
+      if (result.success && result.data) {
+        setSessions(result.data)
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setLoading(false)
+    }
+  }, [appId])
+
+  useEffect(() => {
+    fetchSessions()
+    const interval = setInterval(fetchSessions, 15_000)
+    return () => clearInterval(interval)
+  }, [fetchSessions])
+
+  const handleRemove = useCallback(async (session: ImSessionRecord) => {
+    try {
+      const result = await api.imSessionsRemove({
+        appId: session.appId,
+        channel: session.channel,
+        chatId: session.chatId,
+      })
+      if (result.success) {
+        setSessions(prev =>
+          prev.filter(s => !(s.appId === session.appId && s.channel === session.channel && s.chatId === session.chatId))
+        )
+      }
+    } catch {
+      // Ignore
+    }
+  }, [])
+
+  const handleStartRename = useCallback((session: ImSessionRecord) => {
+    const key = `${session.appId}:${session.channel}:${session.chatId}`
+    setEditingKey(key)
+    setEditingName(session.customName ?? session.displayName)
+    setTimeout(() => renameInputRef.current?.focus(), 0)
+  }, [])
+
+  const handleCommitRename = useCallback(async (session: ImSessionRecord) => {
+    const trimmed = editingName.trim()
+    setEditingKey(null)
+    if (!trimmed || trimmed === (session.customName ?? session.displayName)) return
+
+    try {
+      const result = await api.imSessionsSetCustomName({
+        appId: session.appId,
+        channel: session.channel,
+        chatId: session.chatId,
+        name: trimmed,
+      })
+      if (result.success) {
+        setSessions(prev =>
+          prev.map(s =>
+            s.appId === session.appId && s.channel === session.channel && s.chatId === session.chatId
+              ? { ...s, customName: trimmed }
+              : s
+          )
+        )
+      }
+    } catch {
+      // Ignore
+    }
+  }, [editingName])
+
+  const handleCopyContact = useCallback(async (session: ImSessionRecord) => {
+    const displayName = session.customName ?? session.displayName
+    const text = `Name: ${displayName} ID: ${session.instanceId}:${session.chatId}`
+    try {
+      await navigator.clipboard.writeText(text)
+      const key = `${session.appId}:${session.channel}:${session.chatId}`
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch {
+      // Ignore
+    }
+  }, [])
+
+  if (loading) {
     return (
-      <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg opacity-50">
-        <div className="w-5 h-5 rounded border border-border bg-muted flex-shrink-0" />
-        <Icon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-muted-foreground">{t(channel.labelKey)}</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-              isBidirectional
-                ? 'bg-primary/10 text-primary'
-                : 'bg-muted text-muted-foreground'
-            }`}>
-              {isBidirectional ? t('Bidirectional') : t('One-way')}
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground/60 mt-0.5">{t('Not configured')}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onGoToSettings}
-          className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors flex-shrink-0"
-        >
-          {t('Go to Settings')}
-          <ExternalLink className="w-3 h-3" />
-        </button>
+      <div className="text-sm text-muted-foreground py-3 text-center">
+        {t('Loading...')}
       </div>
     )
   }
 
-  // Configured channel
-  return (
-    <div className="rounded-lg border border-border overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/30 transition-colors">
-        {/* Checkbox */}
-        <label className="relative flex-shrink-0 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={checked}
-            onChange={onToggle}
-            className="sr-only peer"
-          />
-          <div className="w-5 h-5 rounded border border-border bg-muted peer-checked:bg-primary peer-checked:border-primary transition-colors flex items-center justify-center">
-            {checked && (
-              <svg className="w-3 h-3 text-primary-foreground" viewBox="0 0 12 12" fill="none">
-                <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            )}
-          </div>
-        </label>
-
-        {/* Channel info */}
-        <Icon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-foreground">{t(channel.labelKey)}</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-              isBidirectional
-                ? 'bg-primary/10 text-primary'
-                : 'bg-muted text-muted-foreground'
-            }`}>
-              {isBidirectional ? t('Bidirectional') : t('One-way')}
-            </span>
-          </div>
-        </div>
-
-        {/* Status + expand toggle for bidirectional */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {isBidirectional && status.connected !== undefined && (
-            <div className="flex items-center gap-1.5">
-              <div className={`w-1.5 h-1.5 rounded-full ${status.connected ? 'bg-green-500' : 'bg-amber-500'}`} />
-              <span className="text-xs text-muted-foreground hidden sm:inline">
-                {status.connected ? t('Connected') : t('Disconnected')}
-              </span>
-            </div>
-          )}
-          {!isBidirectional && (
-            <div className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              <span className="text-xs text-muted-foreground hidden sm:inline">{t('Configured')}</span>
-            </div>
-          )}
-          {isBidirectional && onToggleExpand && (
-            <button
-              type="button"
-              onClick={onToggleExpand}
-              className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
-            >
-              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
-            </button>
-          )}
-        </div>
+  if (sessions.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-4 text-center space-y-1">
+        <MessageSquare className="w-5 h-5 mx-auto mb-1 opacity-30" />
+        <p>{t('No contacts yet')}</p>
+        <p className="text-xs">{t('Contacts appear automatically when someone messages via Bot')}</p>
       </div>
+    )
+  }
 
-      {/* Expanded content (IM sessions for bidirectional channels) */}
-      {isBidirectional && expanded && children && (
-        <div className="px-3 pb-3 border-t border-border pt-2 animate-in slide-in-from-top-1 duration-150">
-          {children}
-        </div>
-      )}
+  return (
+    <div className="space-y-1.5">
+      {sessions.map((session) => {
+        const channelInfo = getImChannelDisplay(session.channel)
+        const key = `${session.appId}:${session.channel}:${session.chatId}`
+        const displayName = session.customName ?? session.displayName
+
+        return (
+          <div
+            key={key}
+            className="flex items-center gap-2.5 p-2.5 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors group/contact"
+          >
+            {/* Chat type icon */}
+            {session.chatType === 'group' ? (
+              <Users className="w-4 h-4 text-muted-foreground shrink-0" />
+            ) : (
+              <User className="w-4 h-4 text-muted-foreground shrink-0" />
+            )}
+
+            {/* Contact info */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                {editingKey === key ? (
+                  <input
+                    ref={renameInputRef}
+                    type="text"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onBlur={() => handleCommitRename(session)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCommitRename(session)
+                      if (e.key === 'Escape') setEditingKey(null)
+                    }}
+                    className="text-sm font-medium bg-background border border-border rounded px-1.5 py-0.5 outline-none focus:ring-1 focus:ring-primary w-full max-w-[200px]"
+                  />
+                ) : (
+                  <>
+                    <span className="text-sm font-medium truncate">
+                      {displayName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleStartRename(session)}
+                      className="p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/contact:opacity-100"
+                      title={t('Rename')}
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  </>
+                )}
+                <span className={`text-xs shrink-0 ${channelInfo.color}`}>
+                  {channelInfo.label}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground/60 mt-0.5 flex flex-wrap items-center gap-x-1">
+                <span>{session.chatType === 'group' ? t('Group') : t('Direct')}</span>
+                <span>·</span>
+                <span className="font-mono text-[10px] break-all">{session.chatId}</span>
+                <span>·</span>
+                <span>{formatTime(session.lastActiveAt)}</span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleCopyContact(session)}
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/contact:opacity-100"
+                title={t('Copy contact info')}
+              >
+                {copiedKey === key
+                  ? <Check className="w-3.5 h-3.5 text-green-500" />
+                  : <Copy className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRemove(session)}
+                className="p-1 text-muted-foreground hover:text-red-500 transition-colors rounded opacity-0 group-hover/contact:opacity-100"
+                title={t('Remove')}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -281,125 +360,27 @@ function ChannelRow({
 // Main Component
 // ============================================
 
-export function AppNotifyChannelsSection({ appId, selectedChannels, appName }: AppNotifyChannelsSectionProps) {
+export function AppNotifyChannelsSection({ appId, appName, imPushEnabled }: AppNotifyChannelsSectionProps) {
   const { t } = useTranslation()
-  const { setView } = useAppStore()
-  const { updateAppSpec } = useAppsStore()
-
-  const [globalConfig, setGlobalConfig] = useState<HaloConfig | null>(null)
-  const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
-  const [expandedBidirectional, setExpandedBidirectional] = useState<Set<string>>(new Set(['wecom-bot']))
-
-  // Fetch global config to determine one-way channel statuses
-  useEffect(() => {
-    let cancelled = false
-    async function fetch() {
-      try {
-        const res = await api.getConfig() as { success: boolean; data?: HaloConfig }
-        if (!cancelled && res.success && res.data) {
-          setGlobalConfig(res.data)
-        }
-      } catch {
-        // Ignore
-      }
-    }
-    fetch()
-    return () => { cancelled = true }
-  }, [])
-
-  // Poll IM channel instance statuses (covers all bidirectional channels)
-  useEffect(() => {
-    let cancelled = false
-    async function fetchStatuses() {
-      try {
-        const res = await api.imChannelsStatus() as { success: boolean; data?: ImChannelInstanceStatus[] }
-        if (!cancelled && res.success && res.data) {
-          setImStatuses(res.data)
-        }
-      } catch {
-        // Ignore
-      }
-    }
-    fetchStatuses()
-    const interval = setInterval(fetchStatuses, 15_000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [])
-
-  const channelStatuses = getChannelStatuses(globalConfig, imStatuses)
-
-  // Toggle a one-way notification channel
-  const handleToggleChannel = useCallback(async (notifyType: NotificationChannelType) => {
-    const current = new Set(selectedChannels)
-    if (current.has(notifyType)) {
-      current.delete(notifyType)
-    } else {
-      current.add(notifyType)
-    }
-    const channels = [...current]
-    await updateAppSpec(appId, {
-      output: {
-        notify: {
-          channels: channels.length > 0 ? channels : undefined,
-        },
-      },
-    })
-  }, [appId, selectedChannels, updateAppSpec])
-
-  const handleGoToSettings = useCallback(() => {
-    setView('settings')
-    // Scroll to message-channels section after navigation
-    setTimeout(() => {
-      const el = document.getElementById('message-channels')
-      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 100)
-  }, [setView])
-
-  const toggleBidirectionalExpand = useCallback((channelId: string) => {
-    setExpandedBidirectional(prev => {
-      const next = new Set(prev)
-      if (next.has(channelId)) {
-        next.delete(channelId)
-      } else {
-        next.add(channelId)
-      }
-      return next
-    })
-  }, [])
 
   return (
-    <div className="space-y-2">
-      {ALL_CHANNELS.map((channel) => {
-        const status = channelStatuses[channel.id] ?? { configured: false }
-        const isBidirectional = channel.direction === 'bidirectional'
+    <div className="space-y-4">
+      {/* A. Notification Channel Overview */}
+      <ChannelOverview />
 
-        // For one-way channels, "checked" means it's in output.notify.channels
-        // For bidirectional channels, "checked" means it's configured (IM sessions handle the rest)
-        const checked = isBidirectional
-          ? status.configured
-          : Boolean(channel.notifyType && selectedChannels.includes(channel.notifyType))
-
-        return (
-          <ChannelRow
-            key={channel.id}
-            channel={channel}
-            status={status}
-            checked={checked}
-            onToggle={() => {
-              if (channel.notifyType) {
-                handleToggleChannel(channel.notifyType)
-              }
-            }}
-            onGoToSettings={handleGoToSettings}
-            expanded={isBidirectional ? expandedBidirectional.has(channel.id) : undefined}
-            onToggleExpand={isBidirectional ? () => toggleBidirectionalExpand(channel.id) : undefined}
-          >
-            {/* IM Sessions for bidirectional channels */}
-            {isBidirectional && (
-              <ImSessionsSection appId={appId} appName={appName} compact />
-            )}
-          </ChannelRow>
-        )
-      })}
+      {/* B. Reachable Contacts (only when im-push enabled) */}
+      {imPushEnabled && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Users className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-sm font-medium text-foreground">{t('Reachable Contacts')}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t('AI can proactively send messages to these contacts. Names help AI match your instructions.')}
+          </p>
+          <ContactsSection appId={appId} />
+        </div>
+      )}
     </div>
   )
 }

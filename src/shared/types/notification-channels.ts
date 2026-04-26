@@ -167,7 +167,10 @@ export interface NotificationChannelsConfig {
 export interface OutputNotifyConfig {
   /** Send system desktop notification (default: true) */
   system?: boolean
-  /** External channels to notify on completion */
+  /**
+   * @deprecated External channels are now AI-driven via the notify_channel tool.
+   * This field is retained for backward compatibility but ignored at runtime.
+   */
   channels?: NotificationChannelType[]
 }
 

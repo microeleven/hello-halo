@@ -14,7 +14,7 @@
  *   - Onboarding: First-time user guide (only needed once)
  *   - Remote: Remote access feature (optional)
  *   - Browser: Embedded browser for Content Canvas (V2 feature)
- *   - AIBrowser: AI browser automation tools (V2 feature)
+ *   - AIBrowser: AI browser automation tools (self-initializing via MCP server)
  *   - Overlay: Floating UI elements (optional)
  *   - Search: Global search (optional)
  *   - Performance: Developer monitoring tools (dev only)
@@ -26,7 +26,7 @@
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerBrowserHandlers } from '../ipc/browser'
-import { registerAIBrowserHandlers, cleanupAIBrowserHandlers } from '../ipc/ai-browser'
+import { cleanupAIBrowser } from '../services/ai-browser'
 import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
@@ -167,9 +167,9 @@ export function initializeExtendedServices(): void {
   // Note: BrowserView is created lazily when Canvas is opened
   registerBrowserHandlers(mainWindow)
 
-  // AI Browser: AI automation tools (V2 feature)
-  // Uses lazy initialization - heavy modules loaded on first tool call
-  registerAIBrowserHandlers()
+  // AI Browser: No startup registration needed.
+  // Initialization is self-contained in createAIBrowserMcpServer() (called on
+  // demand by send-message, app-chat, and execute). See ai-browser/DESIGN.md.
 
   // Overlay: Floating UI elements (chat capsule, etc.)
   // Already implements lazy initialization internally
@@ -303,8 +303,9 @@ export async function cleanupExtendedServices(): Promise<void> {
   // Background: Shutdown daemon browser, clear keep-alive, destroy tray
   shutdownBackground()
 
-  // AI Browser: Cleanup MCP server and browser context
-  cleanupAIBrowserHandlers()
+  // AI Browser: Cleanup global singleton context (scoped contexts are cleaned
+  // up by their owners: app-chat.ts / execute.ts)
+  cleanupAIBrowser()
 
   // Web Search: Dispose search context (cleanup any in-flight BrowserViews)
   await disposeSearchContext().catch(err => console.error('[Bootstrap] WebSearch shutdown error:', err))

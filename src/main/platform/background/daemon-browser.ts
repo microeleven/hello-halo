@@ -9,9 +9,12 @@
  * - Safety timeout for hung callers
  */
 
-import { BrowserWindow, session } from 'electron'
+import * as path from 'path'
+import * as fs from 'fs'
+import { BrowserWindow, session, app } from 'electron'
 import { injectStealthScripts } from '../../services/stealth'
 import { extractPartition } from './partition'
+import { sanitizeFilename, resolveUniquePath } from '../../services/ai-browser/download-utils'
 
 /**
  * Default user agent matching a real Chrome browser.
@@ -51,6 +54,8 @@ export class DaemonBrowserManager {
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
   private isShuttingDown = false
   private stealthInjected = false
+  /** Tracks partitions that already have a will-download handler to avoid duplicate registration. */
+  private downloadHandlerPartitions = new Set<string>()
 
   /**
    * Acquire the daemon BrowserWindow for a given URL.
@@ -207,6 +212,22 @@ export class DaemonBrowserManager {
 
     // Set a realistic user agent on the session
     sess.setUserAgent(CHROME_USER_AGENT)
+
+    // Silent download handler: daemon browser is always automation,
+    // so all downloads are saved without prompting the user.
+    // Guard: session.fromPartition() returns a singleton per partition, so we must
+    // only register the handler once per partition to avoid listener accumulation.
+    if (!this.downloadHandlerPartitions.has(partition)) {
+      this.downloadHandlerPartitions.add(partition)
+      sess.on('will-download', (_event, item) => {
+        const downloadDir = path.join(app.getPath('downloads'), 'halo-daemon')
+        fs.mkdirSync(downloadDir, { recursive: true })
+        const safeName = sanitizeFilename(item.getFilename())
+        const savePath = resolveUniquePath(downloadDir, safeName)
+        item.setSavePath(savePath)
+        console.log(`[DaemonBrowser] Silent download: ${path.basename(savePath)} -> ${downloadDir}`)
+      })
+    }
 
     this.daemonWindow = new BrowserWindow({
       show: false,

@@ -1,90 +1,23 @@
 /**
- * AI Browser Module - Main Entry Point
+ * AI Browser Module - Public API
  *
  * This module provides AI-controlled browser capabilities for Halo.
  * It enables the AI to navigate web pages, interact with elements,
  * and extract information - all without requiring external tools.
  *
- * Key Features:
- * - 27 browser control tools compatible with Claude Agent SDK
- * - Accessibility tree-based element identification
- * - Network and console monitoring
- * - Screenshot capture
- * - Device/network emulation
- *
- * Usage:
- * 1. Initialize with main window
- * 2. Create SDK MCP server with createAIBrowserMcpServer()
- * 3. Pass to SDK via mcpServers option
+ * Entry Points (see DESIGN.md for full architecture):
+ *   createAIBrowserMcpServer()   — Creates the MCP tool server (primary entry)
+ *   createScopedBrowserContext()  — Creates an isolated context for automation
+ *   cleanupAIBrowser()           — Destroys the global singleton on shutdown
+ *   AI_BROWSER_SYSTEM_PROMPT     — System prompt fragment for AI instructions
  */
 
-import { BrowserWindow } from 'electron'
-import { browserContext, BrowserContext, createScopedBrowserContext } from './context'
-import { browserViewManager } from '../browser-view.service'
+import { browserContext, createScopedBrowserContext } from './context'
+import { createAIBrowserMcpServer } from './sdk-mcp-server'
 
-// Import SDK MCP server creator
-import { createAIBrowserMcpServer, getAIBrowserSdkToolNames } from './sdk-mcp-server'
-
-// Re-export SDK MCP server functions
-export { createAIBrowserMcpServer, getAIBrowserSdkToolNames }
+// Re-export public API
+export { createAIBrowserMcpServer }
 export { createScopedBrowserContext }
-
-// ============================================
-// Module Initialization
-// ============================================
-
-/**
- * Initialize the AI Browser module
- * Must be called with the main window before using any tools
- */
-export function initializeAIBrowser(mainWindow: BrowserWindow): void {
-  browserContext.initialize(mainWindow)
-
-  // Extend browserViewManager to expose getWebContents
-  extendBrowserViewManager()
-
-  console.log('[AI Browser] Module initialized')
-}
-
-/**
- * Extend browserViewManager to expose webContents access
- * This is needed for the context to execute CDP commands
- */
-function extendBrowserViewManager(): void {
-  const manager = browserViewManager as any
-
-  // Add getWebContents method if not exists
-  if (!manager.getWebContents) {
-    manager.getWebContents = (viewId: string) => {
-      const view = manager.views?.get(viewId)
-      return view?.webContents || null
-    }
-  }
-
-  // Add getAllStates method if not exists
-  if (!manager.getAllStates) {
-    manager.getAllStates = () => {
-      const states: any[] = []
-      if (manager.states) {
-        for (const [id, state] of manager.states) {
-          states.push({ ...state, id })
-        }
-      }
-      return states
-    }
-  }
-}
-
-// ============================================
-// Tool Registration
-// ============================================
-
-/**
- * Check if a tool name is an AI Browser tool
- */
-export function isAIBrowserTool(toolName: string): boolean {
-  return toolName.startsWith('browser_')
-}
 
 // ============================================
 // System Prompt
@@ -142,6 +75,9 @@ You can now control Halo's embedded real browser. All browser tools are provided
 - \`browser_emulate\` - Emulate device/network
 - \`browser_resize\` - Resize viewport
 
+**Download:**
+- \`browser_download\` - Download a file or wait for a download to complete. Provide \`url\` for direct downloads, or omit to wait for a download triggered by a previous click. Returns file path, size, and status.
+
 ### Important Notes
 - **Always use the latest snapshot** - UIDs change after page updates
 - Prefer \`browser_snapshot\` over \`browser_screenshot\` (more lightweight)
@@ -150,27 +86,16 @@ You can now control Halo's embedded real browser. All browser tools are provided
 `
 
 // ============================================
-// Context Access
+// Lifecycle
 // ============================================
 
 /**
- * Get the browser context for advanced operations
- */
-export function getBrowserContext(): BrowserContext {
-  return browserContext
-}
-
-/**
- * Set the active browser view for AI operations
- */
-export function setActiveBrowserView(viewId: string): void {
-  browserContext.setActiveViewId(viewId)
-}
-
-/**
- * Clean up AI Browser resources
+ * Clean up AI Browser resources (global singleton only).
+ *
+ * Called by bootstrap/extended.ts during app shutdown.
+ * Scoped contexts are cleaned up by their owners (app-chat / execute).
  */
 export function cleanupAIBrowser(): void {
   browserContext.destroy()
-  console.log('[AI Browser] Module cleaned up')
+  console.log('[AI Browser] Global context cleaned up')
 }

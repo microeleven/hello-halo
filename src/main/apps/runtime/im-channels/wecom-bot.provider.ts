@@ -32,6 +32,7 @@ import type {
   ImFileCapability,
   ImChannelConfigFieldDef,
   ImChannelType,
+  SanctionedFile,
 } from '../../../../shared/types/im-channel'
 import type {
   InboundMessage,
@@ -700,8 +701,8 @@ class WecomBotInstance implements ImChannelInstance {
    * Bound to this instance so callers don't need to hold a reference to the instance.
    */
   readonly fileCapability: ImFileCapability = {
-    sendFile: (chatId, filePath, chatType, filename) =>
-      this.sendFileToChat(chatId, filePath, chatType, filename),
+    sendFile: (chatId, file, chatType) =>
+      this.sendFileToChat(chatId, file.resolvedPath, chatType, file.displayName),
   }
 
   // ── Reply (using req_id from inbound message) ─────────────────

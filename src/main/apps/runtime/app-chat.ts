@@ -56,7 +56,10 @@ import { buildAppChatSystemPrompt } from './prompt-chat'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
+import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
+import { FileExportGate } from './file-export-gate'
+import { getImSessionRegistry } from './im-session-registry'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
 import { createEmailMcpServer } from '../../services/email-mcp'
@@ -319,6 +322,7 @@ export async function sendAppChatMessage(
   const memoryInstructions = memory.getPromptInstructions()
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
   const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
+  const usesImPush = resolvePermission(app, 'im-push', false) // default false — AI-driven IM push
 
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
@@ -355,11 +359,19 @@ export async function sendAppChatMessage(
     }
   }
 
-  // Notify tool: allows AI to send external notifications (email, WeCom, etc.)
+  // Notify tool: allows AI to send notifications to channels and IM contacts
+  // FileExportGate restricts outbound file sends to space directory + tmpdir
+  const exportGate = new FileExportGate([memoryScope.spacePath, osTmpdir()])
+  const imSessions = usesImPush
+    ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
+    : []
   const notifyMcpServer = createNotifyToolServer({
     appId: app.id,
     appName: app.spec.name,
-    runId: CHAT_RUN_ID,
+    runId: deriveRunId(conversationId, appId),
+    imSessions,
+    usesImPush,
+    exportGate,
   })
 
   // Report tool: allows AI to write activity entries in chat mode
@@ -370,7 +382,6 @@ export async function sendAppChatMessage(
     runId: CHAT_RUN_ID,
     sessionKey: conversationId,
     notificationLevel: app.userOverrides?.notificationLevel,
-    notifyChannels: (app.spec as any).output?.notify?.channels,
   }
 
   const mcpServers: Record<string, any> = {

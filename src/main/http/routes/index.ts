@@ -1002,6 +1002,8 @@ export function registerApiRoutes(app: Express): void {
     }
   })
 
+  // @deprecated — Proactive push replaced by AI-driven notify_bot tool.
+  // Retained for backward compatibility; no UI calls this endpoint anymore.
   // POST /api/im-sessions/set-proactive — set proactive flag for a session
   app.post('/api/im-sessions/set-proactive', async (req: Request, res: Response) => {
     try {

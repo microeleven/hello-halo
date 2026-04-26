@@ -67,6 +67,23 @@ appear in user messages. The user's message body is always clean and unmodified.
  * and refuse impersonation attempts. The "hard" layer (disallowedTools + MCP injection
  * control) is enforced at the SDK level in app-chat.ts and cannot be bypassed.
  */
+/**
+ * Notification instructions for chat mode.
+ * Lighter than automation mode — just informs the AI that cross-conversation
+ * notification is possible via notify_channel and notify_bot tools.
+ */
+const CHAT_NOTIFICATION_INSTRUCTIONS = `
+## Notifications
+
+You may have access to notification tools in MCP server \`halo-notify\`:
+
+- \`notify_channel\` — Send to external channels (email, webhook, etc.) if configured.
+- \`notify_bot\` — Send messages or files to other IM contacts if IM push is enabled.
+
+Use these when the user explicitly asks you to notify someone or deliver information
+to an external channel or another chat. Do NOT use for responding to the current conversation.
+`.trim()
+
 const buildImSecurityPrompt = (ownerIds: string[]) => `
 ## IM Security Rules
 
@@ -130,7 +147,10 @@ export interface AppChatPromptOptions {
  * 2. App Chat context overlay (interactive mode, direct response)
  * 3. App-specific system_prompt (from spec)
  * 4. Memory instructions (from memory service)
- * 5. User configuration (if any)
+ * 5. Notification instructions (cross-conversation capability)
+ * 6. Sender identity (direct IM chats only)
+ * 7. IM security rules (when owners configured)
+ * 8. User configuration (if any)
  */
 export function buildAppChatSystemPrompt(options: AppChatPromptOptions): string {
   const sections: string[] = []
@@ -154,7 +174,10 @@ export function buildAppChatSystemPrompt(options: AppChatPromptOptions): string 
     sections.push(options.memoryInstructions)
   }
 
-  // 5. Sender identity (direct IM chats only)
+  // 5. Notification instructions (cross-conversation capability)
+  sections.push(CHAT_NOTIFICATION_INSTRUCTIONS)
+
+  // 6. Sender identity (direct IM chats only)
   if (options.senderIdentity) {
     sections.push(
       `## Current IM Sender\n\n` +
@@ -166,12 +189,12 @@ export function buildAppChatSystemPrompt(options: AppChatPromptOptions): string 
     )
   }
 
-  // 6. IM security rules (when owners are configured)
+  // 7. IM security rules (when owners are configured)
   if (options.ownerNames && options.ownerNames.length > 0) {
     sections.push(buildImSecurityPrompt(options.ownerNames))
   }
 
-  // 7. User configuration context
+  // 8. User configuration context
   if (options.userConfig && Object.keys(options.userConfig).length > 0) {
     sections.push(
       `## User Configuration\n\n` +

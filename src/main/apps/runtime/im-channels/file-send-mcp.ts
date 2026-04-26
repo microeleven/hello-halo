@@ -12,8 +12,10 @@
  *
  * Usage pattern:
  *   // In dispatch-inbound.ts (per message):
- *   const sendFn = (filePath, filename) =>
- *     instance.fileCapability!.sendFile(chatId, filePath, chatType, filename)
+ *   const sendFn = (filePath, filename) => {
+ *     const sanctioned = exportGate.sanction(filePath)  // path validation
+ *     return instance.fileCapability!.sendFile(chatId, sanctioned, chatType)
+ *   }
  *   const mcpServer = createFileSendMcpServer(sendFn)
  *   // Then pass mcpServer to sendAppChatMessage() via imFileSend
  */

@@ -221,28 +221,6 @@ export function SchedulePicker({
     if (parsedPickerState) setPickerState(parsedPickerState)
   }, [parsedPickerState])
 
-  // ── Read-only mode ──
-  if (readOnlyReason || (isComplexCron && !disabled)) {
-    const desc = value.type === 'cron'
-      ? formatCronHumanReadable(value.cron, locale)
-      : ''
-    return (
-      <div className="space-y-2">
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-secondary border border-border">
-          <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-          <div className="space-y-1 min-w-0">
-            {desc && (
-              <p className="text-sm text-foreground">{desc}</p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              {readOnlyReason || t('This cron expression cannot be edited visually. Edit in YAML tab for full control.')}
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   // ── Filter presets by constraints ──
   const filteredPresets = useMemo(() => {
     if (!constraints) return FREQUENCY_PRESETS
@@ -284,6 +262,28 @@ export function SchedulePicker({
     }
     return null
   }, [value, locale])
+
+  // ── Read-only mode (after all hooks to satisfy Rules of Hooks) ──
+  if (readOnlyReason || (isComplexCron && !disabled)) {
+    const desc = value.type === 'cron'
+      ? formatCronHumanReadable(value.cron, locale)
+      : ''
+    return (
+      <div className="space-y-2">
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-secondary border border-border">
+          <Info className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+          <div className="space-y-1 min-w-0">
+            {desc && (
+              <p className="text-sm text-foreground">{desc}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {readOnlyReason || t('This cron expression cannot be edited visually. Edit in YAML tab for full control.')}
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-3">

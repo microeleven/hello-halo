@@ -129,7 +129,7 @@ function matchDomainPattern(hostname: string, pattern: string): boolean {
  * - Allowlist mode → URL must match at least one pattern.
  * - Blocklist mode → URL must NOT match any pattern.
  */
-function isUrlAllowedByPolicy(url: string): boolean {
+export function isUrlAllowedByPolicy(url: string): boolean {
   const policy = loadProductConfig().browserPolicy
   if (!policy || policy.mode === 'unrestricted') return true
 
@@ -1027,6 +1027,26 @@ class BrowserViewManager {
     if (!this.views.has(viewId)) return false
     this.activeViewId = viewId
     return true
+  }
+
+  /**
+   * Reverse lookup: find the viewId that owns a given webContents ID.
+   * Used by the download handler to route downloads to the correct BrowserContext.
+   */
+  findViewIdByWebContentsId(wcId: number): string | null {
+    for (const [viewId, view] of this.views) {
+      if (!view.webContents.isDestroyed() && view.webContents.id === wcId) {
+        return viewId
+      }
+    }
+    return null
+  }
+
+  /**
+   * Check if a viewId belongs to an AI-created view (prefix: "ai-browser-").
+   */
+  isAIView(viewId: string): boolean {
+    return viewId.startsWith('ai-browser-')
   }
 
   /**

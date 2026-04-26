@@ -106,7 +106,11 @@ export class ImSessionRegistry {
 
   /**
    * Set the proactive flag for a session.
-   * Called by the user via Halo settings UI.
+   *
+   * @deprecated Proactive push is replaced by AI-driven `notify_bot` tool.
+   * The `proactive` field on ImSessionRecord is deprecated and no longer
+   * toggled by the UI. This method is retained only for backward compatibility
+   * with persisted data; it should not be called from new code.
    *
    * @returns true if the session was found and updated
    */
@@ -122,7 +126,11 @@ export class ImSessionRegistry {
 
   /**
    * Get all sessions with proactive=true for a given app.
-   * Used by the scheduler trigger to decide whether to route through IM.
+   *
+   * @deprecated Proactive push is replaced by AI-driven `notify_bot` tool.
+   * Since `proactive` is always false for new sessions and the UI toggle has
+   * been removed, this method always returns an empty array. Callers should
+   * use `getAllSessions()` instead to get the full contact list for notify_bot.
    */
   getProactiveSessions(appId: string): ImSessionRecord[] {
     const result: ImSessionRecord[] = []

@@ -13,7 +13,9 @@
  * All AI Browser tools operate through this context.
  */
 
-import { BrowserWindow, nativeImage } from 'electron'
+import * as path from 'path'
+import * as fs from 'fs'
+import { BrowserWindow, nativeImage, app } from 'electron'
 import { browserViewManager } from '../browser-view.service'
 import {
   createAccessibilitySnapshot,
@@ -21,13 +23,20 @@ import {
   scrollIntoView,
   focusElement
 } from './snapshot'
+import {
+  registerWebContentsForDownload,
+  unregisterWebContentsForDownload
+} from './download-handler'
+import { sanitizeFilename, resolveUniquePath } from './download-utils'
 import type {
   BrowserContextInterface,
   AccessibilitySnapshot,
   AccessibilityNode,
   NetworkRequest,
   ConsoleMessage,
-  DialogInfo
+  DialogInfo,
+  DownloadInfo,
+  DownloadState
 } from './types'
 
 // Default timeout for CDP commands (ms)
@@ -80,6 +89,17 @@ export class BrowserContext implements BrowserContextInterface {
   // Dialog handling state
   private pendingDialog: DialogInfo | null = null
   private dialogResolver: ((result: { accept: boolean; promptText?: string }) => void) | null = null
+
+  // Download tracking state (capped at MAX_DOWNLOAD_HISTORY to prevent unbounded growth)
+  private static readonly MAX_DOWNLOAD_HISTORY = 500
+  private downloads: Map<string, DownloadInfo> = new Map()
+  private downloadCounter: number = 0
+  private downloadDirCreated: boolean = false
+  private pendingDownloadResolvers: Array<{
+    resolve: (info: DownloadInfo) => void
+    reject: (error: Error) => void
+    timer: NodeJS.Timeout
+  }> = []
 
   // Performance tracing state
   private isTracing: boolean = false
@@ -544,6 +564,138 @@ export class BrowserContext implements BrowserContextInterface {
     } catch (error) {
       console.error('[BrowserContext] Failed to handle dialog:', error)
     }
+  }
+
+  // ============================================
+  // Download Handling
+  // ============================================
+
+  /**
+   * Get the download directory for this context.
+   * Scoped contexts use {workDir}/downloads/, global singleton uses system Downloads/halo-ai/.
+   */
+  getDownloadDir(): string {
+    const dir = this.workDir
+      ? path.join(this.workDir, 'downloads')
+      : path.join(app.getPath('downloads'), 'halo-ai')
+    if (!this.downloadDirCreated) {
+      fs.mkdirSync(dir, { recursive: true })
+      this.downloadDirCreated = true
+    }
+    return dir
+  }
+
+  /**
+   * Get all tracked downloads.
+   */
+  getDownloads(): DownloadInfo[] {
+    return Array.from(this.downloads.values())
+  }
+
+  /**
+   * Get a download by ID.
+   */
+  getDownload(id: string): DownloadInfo | undefined {
+    return this.downloads.get(id)
+  }
+
+  /**
+   * Register a new download. Called by the session-level will-download handler.
+   * Sanitizes the filename, resolves a unique path, and creates a tracking entry.
+   */
+  registerDownload(
+    url: string,
+    suggestedFilename: string,
+    totalBytes: number,
+    mimeType: string
+  ): { id: string; resolvedPath: string } {
+    this.downloadCounter++
+    const id = `dl_${this.downloadCounter}`
+    const sanitized = sanitizeFilename(suggestedFilename)
+    const downloadDir = this.getDownloadDir()
+    const resolvedPath = resolveUniquePath(downloadDir, sanitized)
+
+    const info: DownloadInfo = {
+      id,
+      url,
+      filename: path.basename(resolvedPath),
+      savePath: resolvedPath,
+      state: 'pending',
+      totalBytes,
+      receivedBytes: 0,
+      mimeType,
+      startTime: Date.now(),
+    }
+
+    this.downloads.set(id, info)
+
+    // Evict oldest consumed/completed entries if over capacity
+    if (this.downloads.size > BrowserContext.MAX_DOWNLOAD_HISTORY) {
+      for (const [oldId, oldInfo] of this.downloads) {
+        if (oldInfo.consumed && (oldInfo.state === 'completed' || oldInfo.state === 'failed' || oldInfo.state === 'cancelled')) {
+          this.downloads.delete(oldId)
+          if (this.downloads.size <= BrowserContext.MAX_DOWNLOAD_HISTORY) break
+        }
+      }
+    }
+
+    return { id, resolvedPath }
+  }
+
+  /**
+   * Update download progress. Resolves waitForDownload() promises on terminal states.
+   */
+  updateDownloadProgress(id: string, receivedBytes: number, state: DownloadState, error?: string): void {
+    const info = this.downloads.get(id)
+    if (!info) return
+
+    info.receivedBytes = receivedBytes
+    info.state = state
+    if (error) info.error = error
+
+    // Terminal state: set end time and resolve any pending waiters
+    if (state === 'completed' || state === 'failed' || state === 'cancelled') {
+      info.endTime = Date.now()
+
+      // Resolve the oldest pending waiter (FIFO) and mark as consumed
+      if (this.pendingDownloadResolvers.length > 0) {
+        const waiter = this.pendingDownloadResolvers.shift()!
+        clearTimeout(waiter.timer)
+        info.consumed = true
+        waiter.resolve(info)
+      }
+    }
+  }
+
+  /**
+   * Wait for the next download to reach a terminal state.
+   * Returns a promise that resolves with the DownloadInfo.
+   *
+   * If a download has already completed since the last call to waitForDownload,
+   * resolves immediately.
+   */
+  waitForDownload(timeout: number = 60_000): Promise<DownloadInfo> {
+    // Check if there's already a completed download that hasn't been consumed.
+    // No time window restriction — relies solely on the `consumed` flag to prevent
+    // double-consumption. This handles the common case where AI clicks a download
+    // button and the file completes before the next tool call arrives (LLM latency).
+    for (const [, info] of this.downloads) {
+      if ((info.state === 'completed' || info.state === 'failed' || info.state === 'cancelled')
+          && !info.consumed) {
+        info.consumed = true
+        return Promise.resolve(info)
+      }
+    }
+
+    return new Promise<DownloadInfo>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.pendingDownloadResolvers.findIndex(w => w.resolve === resolve)
+        if (idx !== -1) this.pendingDownloadResolvers.splice(idx, 1)
+        reject(new Error(`No download completed within ${timeout}ms`))
+      }, timeout)
+
+      this.pendingDownloadResolvers.push({ resolve, reject, timer })
+    })
   }
 
   // ============================================
@@ -1340,13 +1492,18 @@ export class BrowserContext implements BrowserContextInterface {
   trackView(viewId: string): void {
     this.ownedViewIds.add(viewId)
 
+    const wc = browserViewManager.getWebContents(viewId)
+    if (!wc) return
+
+    // Register webContents for download routing (both scoped and global contexts).
+    // This enables the session-level will-download handler to route AI downloads
+    // to the correct BrowserContext for silent saving.
+    registerWebContentsForDownload(wc.id, this)
+
     // Guard: media suppression is only for automation (scoped) contexts.
     // The global singleton serves the user's interactive browser and must
     // not interfere with normal autoplay behaviour.
     if (!this._isScoped) return
-
-    const wc = browserViewManager.getWebContents(viewId)
-    if (!wc) return
 
     // Layer 2: mute audio output
     wc.setAudioMuted(true)
@@ -1403,6 +1560,22 @@ export class BrowserContext implements BrowserContextInterface {
    */
   destroy(): void {
     this.disableMonitoring()
+
+    // Unregister webContents from download routing before destroying views
+    for (const viewId of this.ownedViewIds) {
+      const wc = browserViewManager.getWebContents(viewId)
+      if (wc && !wc.isDestroyed()) {
+        unregisterWebContentsForDownload(wc.id)
+      }
+    }
+
+    // Reject any pending download waiters
+    for (const waiter of this.pendingDownloadResolvers) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error('Context destroyed'))
+    }
+    this.pendingDownloadResolvers = []
+    this.downloads.clear()
 
     // Destroy owned views (scoped contexts only -- singleton has no owned views)
     for (const viewId of this.ownedViewIds) {

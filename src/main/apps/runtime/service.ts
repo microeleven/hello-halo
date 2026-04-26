@@ -85,7 +85,6 @@ const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
   const { store, appManager, scheduler, eventRouter, memory, background } = deps
   const imSessionRegistry = deps.imSessionRegistry ?? null
-  const getChannelAdapter = deps.getChannelAdapter ?? (() => null)
 
   // ── Internal State ──────────────────────────────────
   const activations = new Map<string, ActivationState>()
@@ -183,9 +182,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         `Time: ${new Date().toISOString()}`,
     }
   }
-
-  /** Maximum push message length (platform-safe limit) */
-  const MAX_PUSH_LENGTH = 4000
 
   /** Max recent conversation turns (user + bot reply) to include per IM session */
   const IM_HISTORY_TURN_LIMIT = 15
@@ -294,54 +290,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       `Use this to understand what users have been asking about and tailor your output accordingly.\n\n` +
       sections.join('\n\n')
     )
-  }
-
-  /**
-   * Forward the run result to proactive IM sessions via pushToChat.
-   *
-   * Reads the report_to_user activity entry from the Activity Store and
-   * pushes its content to each proactive IM session. Prefers the detailed
-   * `data` field over the brief `summary` for richer IM output.
-   *
-   * Individual session failures are logged but don't affect other sessions.
-   */
-  function forwardResultToIm(
-    sessions: ImSessionRecord[],
-    runId: string
-  ): void {
-    const entries = store.getEntriesForRun(runId)
-    const reportEntry = entries.find(e =>
-      e.type === 'run_complete' || e.type === 'output' || e.type === 'milestone'
-    )
-
-    if (!reportEntry) return
-
-    // Prefer data (detailed markdown) over summary (brief)
-    const data = reportEntry.content.data
-    const pushText = typeof data === 'string' && data.length > 0
-      ? data
-      : reportEntry.content.summary
-
-    if (!pushText) return
-
-    const text = pushText.slice(0, MAX_PUSH_LENGTH)
-
-    for (const session of sessions) {
-      // Prefer instanceId lookup (new multi-instance path), fall back to channel type
-      const adapterKey = session.instanceId || session.channel
-      const adapter = getChannelAdapter(adapterKey)
-      if (!adapter?.isConnected()) {
-        console.warn(`[Runtime] IM forward skipped: adapter "${adapterKey}" not connected`)
-        continue
-      }
-
-      const sent = adapter.pushToChat(session.chatId, text, session.chatType)
-      if (sent) {
-        console.log(`[Runtime] IM forward: channel=${session.channel}, instanceId=${session.instanceId || '(legacy)'}, chat=${session.chatId}, len=${text.length}`)
-      } else {
-        console.error(`[Runtime] IM forward failed: channel=${session.channel}, instanceId=${session.instanceId || '(legacy)'}, chat=${session.chatId}`)
-      }
-    }
   }
 
   function buildEscalationTriggerContext(
@@ -557,27 +505,19 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
-      // Handle output.notify — send notifications on successful completion
-      const notifyConfig = app.spec.type === 'automation' ? app.spec.output?.notify : undefined
-      const shouldNotify = notifyConfig && (notifyConfig.system !== false || (notifyConfig.channels && notifyConfig.channels.length > 0))
-      console.log(`[Runtime][Notify] output.notify check: config=${JSON.stringify(notifyConfig)}, outcome=${outcome}`)
-      if (shouldNotify && outcome !== 'error') {
+      // Desktop notification on run completion (system notification only).
+      // External channel notifications are now AI-driven via notify_channel / notify_bot tools.
+      if (outcome !== 'error') {
         try {
           const entries = store.getEntriesForApp(app.id, { type: 'run_complete', limit: 1 })
           const latestComplete = entries[0]
           const body = latestComplete?.content?.summary ?? `${app.spec.name} completed`
-          console.log(`[Runtime][Notify] Calling notifyAppEvent: title="${app.spec.name}", bodyLen=${body.length}`)
           notifyAppEvent(app.spec.name, body, {
             appId: app.id,
-            channels: notifyConfig.channels,
-            skipSystem: notifyConfig.system === false,
           })
-          console.log(`[Runtime][Notify] notifyAppEvent returned`)
         } catch (notifyErr) {
-          console.error('[Runtime] Failed to send output.notify notification:', notifyErr)
+          console.error('[Runtime] Failed to send desktop notification:', notifyErr)
         }
-      } else {
-        console.log(`[Runtime][Notify] Skipped — condition not met (notify=${JSON.stringify(notifyConfig)}, outcome=${outcome})`)
       }
 
       return result
@@ -1093,9 +1033,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const trigger = buildManualTriggerContext(app)
 
       // ── Inject IM conversation history into trigger ─────
-      const proactiveSessions = imSessionRegistry?.getProactiveSessions(appId)
-      if (proactiveSessions && proactiveSessions.length > 0) {
-        const imContext = buildImContextForTrigger(app, proactiveSessions)
+      // Use getAllSessions (not the deprecated getProactiveSessions which
+      // filters by the removed `proactive` flag and always returns empty).
+      const imSessions = imSessionRegistry?.getAllSessions(appId)
+      if (imSessions && imSessions.length > 0) {
+        const imContext = buildImContextForTrigger(app, imSessions)
         if (imContext) {
           trigger.description += '\n\n' + imContext
         }
@@ -1103,14 +1045,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
       const result = await executeWithConcurrency(app, trigger)
 
-      // ── Forward result to proactive IM sessions ─────────
-      if (proactiveSessions && proactiveSessions.length > 0 && result.outcome !== 'error') {
-        try {
-          forwardResultToIm(proactiveSessions, result.runId)
-        } catch (fwdErr) {
-          console.error(`[Runtime] IM forward error: app=${appId}:`, fwdErr)
-        }
-      }
+      // IM forwarding is now AI-driven via notify_bot tool (no more system auto-push)
 
       return result
     },
@@ -1428,9 +1363,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     const trigger = buildScheduleTriggerContext(job, app)
 
     // ── Inject IM conversation history into trigger ─────
-    const proactiveSessions = imSessionRegistry?.getProactiveSessions(appId)
-    if (proactiveSessions && proactiveSessions.length > 0) {
-      const imContext = buildImContextForTrigger(app, proactiveSessions)
+    const imSessions = imSessionRegistry?.getAllSessions(appId)
+    if (imSessions && imSessions.length > 0) {
+      const imContext = buildImContextForTrigger(app, imSessions)
       if (imContext) {
         trigger.description += '\n\n' + imContext
       }
@@ -1439,14 +1374,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     try {
       const result = await executeWithConcurrency(app, trigger)
 
-      // ── Forward result to proactive IM sessions ─────────
-      if (proactiveSessions && proactiveSessions.length > 0 && result.outcome !== 'error') {
-        try {
-          forwardResultToIm(proactiveSessions, result.runId)
-        } catch (fwdErr) {
-          console.error(`[Runtime] IM forward error: app=${appId}:`, fwdErr)
-        }
-      }
+      // IM forwarding is now AI-driven via notify_bot tool (no more system auto-push)
 
       return result.outcome as RunOutcome
     } catch (err) {

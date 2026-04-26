@@ -17,6 +17,7 @@
  * - No direct dependency on any specific adapter
  */
 
+import { tmpdir } from 'os'
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
 import { getAppManager } from '../manager'
 import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-chat'
@@ -29,6 +30,8 @@ import { activeSessions } from '../../services/agent/session-manager'
 import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
+import { FileExportGate } from './file-export-gate'
+import { getSpace } from '../../services/space.service'
 
 // ============================================
 // Constants
@@ -79,6 +82,10 @@ const GROUP_REJECTED_MESSAGE =
  * Look up the fileCapability for a channel instance and return a pre-bound
  * send function for the given conversation.
  *
+ * The returned closure integrates `FileExportGate` — it validates the file
+ * path against the space sandbox before delegating to the channel adapter.
+ * This ensures all AI-initiated file sends pass through path validation.
+ *
  * Returns undefined when:
  *   - The ImChannelManager is not initialized
  *   - The instance does not expose fileCapability (text-only channel)
@@ -87,18 +94,26 @@ const GROUP_REJECTED_MESSAGE =
  * @param instanceId - IM channel instance ID
  * @param chatId - Target conversation ID (bound into the closure)
  * @param chatType - Conversation type (bound into the closure)
+ * @param exportGate - FileExportGate for path validation
  */
 function resolveImFileSend(
   instanceId: string,
   chatId: string,
-  chatType: 'direct' | 'group'
+  chatType: 'direct' | 'group',
+  exportGate: FileExportGate
 ): ((filePath: string, filename?: string) => Promise<boolean>) | undefined {
   const manager = getActiveImChannelManager()
   if (!manager) return undefined
   const instance = manager.getInstance(instanceId)
   if (!instance?.fileCapability) return undefined
-  return (filePath: string, filename?: string) =>
-    instance.fileCapability!.sendFile(chatId, filePath, chatType, filename)
+  return (filePath: string, filename?: string) => {
+    const sanctioned = exportGate.sanction(filePath)
+    // Override displayName if caller provided an explicit filename
+    const file = filename
+      ? { ...sanctioned, displayName: filename }
+      : sanctioned
+    return instance.fileCapability!.sendFile(chatId, file, chatType)
+  }
 }
 
 // ============================================
@@ -275,9 +290,13 @@ export async function dispatchInboundMessage(
     messageText += `\n\n[Attached files — use the Read tool to access their content]\n${fileLines}`
   }
 
+  // Build FileExportGate scoped to this app's space + tmpdir
+  const spacePath = getSpace(app.spaceId!)?.path ?? ''
+  const exportGate = new FileExportGate([spacePath, tmpdir()])
+
   // Resolve file-send capability for this instance (absent for text-only channels)
   const chatTypeNorm: 'direct' | 'group' = msg.chatType
-  const imFileSend = resolveImFileSend(instanceId, msg.chatId, chatTypeNorm)
+  const imFileSend = resolveImFileSend(instanceId, msg.chatId, chatTypeNorm, exportGate)
 
   console.log(
     `${LOG_TAG} Routing: channel=${msg.channel}, chatId=${msg.chatId}, ` +

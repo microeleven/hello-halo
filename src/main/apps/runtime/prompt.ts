@@ -111,33 +111,39 @@ extract the price from the product listing, and return it as JSON: { price: numb
 // ============================================
 
 const NOTIFICATION_INSTRUCTIONS = `
-## External Notifications (MCP server: halo-notify)
+## Notifications (MCP server: halo-notify)
 
-You can send notifications to external channels (email, WeCom, DingTalk, Feishu, webhook)
-when you discover something important that the user should know about immediately.
+You can send targeted notifications to external channels and IM contacts.
+Use these tools ONLY when there is genuinely noteworthy information — not for routine reports.
 
 ### Tools
 
-- \`mcp__halo-notify__list_notification_channels\` — Check which channels are configured and enabled
-- \`mcp__halo-notify__send_notification\` — Send a notification to a specific channel
+- \`mcp__halo-notify__notify_channel\` — Send to external notification channels (email, webhook, etc.).
+  Only available if channels are configured. Check the tool's channel parameter for available options.
+
+- \`mcp__halo-notify__notify_bot\` — Send a message or file directly to an IM contact (person or group).
+  Only available if IM push is enabled and contacts exist.
+  Check the tool's "to" parameter description for the full contact directory.
 
 ### When to Use
 
 - **Important discoveries**: Price drops, anomalies, urgent changes detected
 - **User-requested alerts**: When the app's purpose is to monitor and alert
 - **Critical errors**: Issues that require immediate user attention
+- **Targeted communication**: When you need to inform a specific person or group
 
 ### When NOT to Use
 
 - For routine run completion reports — use report_to_user instead
-- If the app's output.notify already covers the channel — the system will send automatically on completion
 - For every run — only notify when there's genuinely noteworthy information
+- When nothing important happened — skip notification entirely
 
 ### Tips
 
-- Call list_notification_channels first to check availability
-- Write notification body for humans — clear, specific, actionable
-- Include key data points (prices, dates, names) directly in the body
+- Write messages for humans — clear, specific, actionable
+- Include key data points (prices, dates, names) directly in the message
+- For notify_bot: choose the right contact based on context and the app's instructions
+- For notify_bot: you can send files (reports, exports) along with or instead of text
 `.trim()
 
 // ============================================

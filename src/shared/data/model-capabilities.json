@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-04-19",
+  "updatedAt": "2026-04-25",
   "patterns": {
     "claude-opus-": {
       "displayName": "Claude Opus",
@@ -130,6 +130,14 @@
       "vision": false,
       "thinking": false
     },
+    "deepseek-v4-": {
+      "displayName": "DeepSeek V4",
+      "provider": "deepseek",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": false,
+      "thinking": true
+    },
     "deepseek-": {
       "displayName": "DeepSeek",
       "provider": "deepseek",
@@ -180,8 +188,24 @@
     }
   },
   "models": {
+    "deepseek-v4-flash": {
+      "displayName": "DeepSeek V4 Flash",
+      "provider": "deepseek",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": false,
+      "thinking": true
+    },
+    "deepseek-v4-pro": {
+      "displayName": "DeepSeek V4 Pro",
+      "provider": "deepseek",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": false,
+      "thinking": true
+    },
     "deepseek-chat": {
-      "displayName": "DeepSeek V3",
+      "displayName": "DeepSeek V3 (Legacy)",
       "provider": "deepseek",
       "contextWindow": 128000,
       "maxOutputTokens": 8192,
@@ -189,7 +213,7 @@
       "thinking": false
     },
     "deepseek-reasoner": {
-      "displayName": "DeepSeek R1",
+      "displayName": "DeepSeek R1 (Legacy)",
       "provider": "deepseek",
       "contextWindow": 128000,
       "maxOutputTokens": 65536,

@@ -247,7 +247,10 @@ export interface AppRuntimeDeps {
   getSpacePath: (spaceId: string) => string | null
   /** IM session registry for proactive push routing (null if not initialized) */
   imSessionRegistry?: import('./im-session-registry').ImSessionRegistry | null
-  /** Resolve a channel adapter by channel identifier (e.g., 'wecom-bot') */
+  /**
+   * @deprecated IM forwarding is now AI-driven via notify_bot tool.
+   * Retained for backward compatibility — no longer used at runtime.
+   */
   getChannelAdapter?: (channel: string) => import('../../../shared/types/im-channel').ImChannelAdapter | null
 }
 

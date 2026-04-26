@@ -1,8 +1,13 @@
 /**
  * IM Sessions Section Component (IM 会话管理)
  *
- * Displays known IM sessions and allows toggling proactive push per session.
- * Sessions are auto-populated when users message the bot — no manual setup needed.
+ * Displays known IM sessions with session management capabilities:
+ * - View session details (chat type, channel, last active)
+ * - Edit custom display names (used by AI for natural language matching)
+ * - Remove stale sessions
+ *
+ * Proactive push toggle has been removed — IM notifications are now
+ * AI-driven via the notify_bot tool, controlled by the im-push permission.
  *
  * Two modes:
  * - With appId: shows sessions for a specific digital human
@@ -13,7 +18,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { MessageSquare, Radio, Users, User, Trash2, Pencil } from 'lucide-react'
+import { MessageSquare, Radio, Users, User, Trash2, Pencil, Copy, Check } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -38,6 +43,7 @@ const CHANNEL_DISPLAY: Record<string, { label: string; color: string }> = {
   'wecom-bot': { label: 'WeCom', color: 'text-green-500' },
   'feishu-bot': { label: 'Feishu', color: 'text-blue-500' },
   'dingtalk-bot': { label: 'DingTalk', color: 'text-indigo-500' },
+  'weixin-ilink-bot': { label: 'WeChat iLink', color: 'text-green-600' },
 }
 
 function getChannelDisplay(channel: string) {
@@ -68,9 +74,9 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
   const [sessions, setSessions] = useState<ImSessionRecord[]>([])
   const [appNames, setAppNames] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [togglingKeys, setTogglingKeys] = useState<Set<string>>(new Set())
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   const isGlobalMode = !appId
@@ -112,37 +118,6 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
     const interval = setInterval(fetchSessions, 15_000)
     return () => clearInterval(interval)
   }, [fetchSessions])
-
-  const handleToggleProactive = useCallback(async (session: ImSessionRecord) => {
-    const key = `${session.appId}:${session.channel}:${session.chatId}`
-    setTogglingKeys(prev => new Set(prev).add(key))
-
-    try {
-      const result = await api.imSessionsSetProactive({
-        appId: session.appId,
-        channel: session.channel,
-        chatId: session.chatId,
-        proactive: !session.proactive,
-      })
-      if (result.success) {
-        setSessions(prev =>
-          prev.map(s =>
-            s.appId === session.appId && s.channel === session.channel && s.chatId === session.chatId
-              ? { ...s, proactive: !s.proactive }
-              : s
-          )
-        )
-      }
-    } catch {
-      // Ignore errors
-    } finally {
-      setTogglingKeys(prev => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
-      })
-    }
-  }, [])
 
   const handleRemove = useCallback(async (session: ImSessionRecord) => {
     try {
@@ -195,6 +170,19 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
     }
   }, [editingName])
 
+  const handleCopyContact = useCallback(async (session: ImSessionRecord) => {
+    const displayName = session.customName ?? session.displayName
+    const text = `Name: ${displayName} ID: ${session.instanceId}:${session.chatId}`
+    try {
+      await navigator.clipboard.writeText(text)
+      const key = `${session.appId}:${session.channel}:${session.chatId}`
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch {
+      // Ignore errors
+    }
+  }, [])
+
   const content = (
     <>
       {loading ? (
@@ -212,7 +200,6 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
           {sessions.map((session) => {
             const channelInfo = getChannelDisplay(session.channel)
             const key = `${session.appId}:${session.channel}:${session.chatId}`
-            const isToggling = togglingKeys.has(key)
             const resolvedAppName = isGlobalMode ? (appNames[session.appId] || session.appId.slice(0, 8)) : null
 
             return (
@@ -275,33 +262,22 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
                     {' · '}
                     {formatTime(session.lastActiveAt)}
                     {' · '}
-                    <span className="font-mono text-[10px]">{session.chatId.length > 16 ? session.chatId.slice(0, 16) + '…' : session.chatId}</span>
+                    <span className="font-mono text-[10px] break-all">{session.chatId}</span>
                   </div>
                 </div>
 
-                {/* Proactive toggle */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground hidden sm:inline">
-                    {t('Proactive')}
-                  </span>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={session.proactive}
-                      onChange={() => handleToggleProactive(session)}
-                      disabled={isToggling}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                      <div
-                        className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform ${
-                          session.proactive ? 'translate-x-4' : 'translate-x-0.5'
-                        } mt-0.5`}
-                      />
-                    </div>
-                  </label>
-
-                  {/* Remove button */}
+                {/* Actions */}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyContact(session)}
+                    className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/session:opacity-100"
+                    title={t('Copy contact info')}
+                  >
+                    {copiedKey === key
+                      ? <Check className="w-3.5 h-3.5 text-green-500" />
+                      : <Copy className="w-3.5 h-3.5" />}
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleRemove(session)}
@@ -320,8 +296,8 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
       {/* Help text */}
       {!compact && (
         <div className="mt-4 p-3 rounded-lg bg-muted/30 text-xs text-muted-foreground space-y-1">
-          <p>{t('When proactive push is enabled, scheduled triggers will send results to the IM conversation instead of keeping them in Halo.')}</p>
-          <p>{t('The AI shares the same conversation memory across user chats and proactive pushes.')}</p>
+          <p>{t('These sessions are available as contacts for the digital human\'s IM push capability.')}</p>
+          <p>{t('Edit display names to help the AI match your natural language instructions (e.g., "Marketing Group").')}</p>
         </div>
       )}
     </>
@@ -342,7 +318,7 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
               {appName && <span className="text-sm text-muted-foreground ml-2">— {appName}</span>}
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {t('Manage proactive push for IM conversations')}
+              {t('Manage IM conversation sessions')}
             </p>
           </div>
         </div>

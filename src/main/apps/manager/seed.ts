@@ -1,13 +1,12 @@
 /**
  * apps/manager -- Default App Seed
  *
- * Seeds a "Halo 助手" default automation app when the apps table is empty.
- * Runs as a Tier 3 idle task so it never blocks startup. Failures are
- * logged as warnings and do not affect any functionality.
+ * Seeds a "Halo 助手" default automation app when no automation-type apps
+ * exist. Runs as a Tier 3 idle task so it never blocks startup. Failures
+ * are logged as warnings and do not affect any functionality.
  *
- * Idempotency: subsequent launches skip seeding because the apps table
- * is no longer empty. If the user deletes all apps, the seed runs again
- * on the next startup.
+ * Idempotency: subsequent launches skip seeding because an automation app
+ * already exists. Skill/MCP apps are ignored — only automation apps count.
  */
 
 import type { AppManagerService } from './types'
@@ -33,17 +32,22 @@ const DEFAULT_APP_SPEC: AutomationSpec = {
 }
 
 /**
- * Seed the default app if the apps table is empty.
+ * Seed the default app if no automation apps exist.
+ *
+ * Only checks automation-type apps — skill/mcp apps do not count.
+ * This ensures the seed fires even when the user has installed
+ * non-automation apps but has never created a digital human.
  *
  * @param appManager - The initialized AppManagerService
  */
 export async function seedDefaultAppIfNeeded(appManager: AppManagerService): Promise<void> {
-  const allApps = appManager.listApps()
-  if (allApps.length > 0) {
+  const automationApps = appManager.listApps({ type: 'automation' })
+  if (automationApps.length > 0) {
+    console.log(`[Seed] Skipped — ${automationApps.length} automation app(s) already exist`)
     return
   }
 
-  console.log('[Seed] Apps table is empty — seeding default "Halo 助手" app')
+  console.log('[Seed] No automation apps found — seeding default "Halo 助手" app')
 
   try {
     const appId = await appManager.install(SEED_SPACE_ID, DEFAULT_APP_SPEC)

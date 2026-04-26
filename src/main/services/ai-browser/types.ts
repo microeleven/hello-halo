@@ -126,6 +126,34 @@ export interface DialogInfo {
 }
 
 // ============================================
+// Download Types
+// ============================================
+
+/**
+ * State of a tracked download
+ */
+export type DownloadState = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'failed'
+
+/**
+ * Download item information
+ */
+export interface DownloadInfo {
+  id: string                   // Internal tracking ID (dl_1, dl_2, ...)
+  url: string                  // Source URL
+  filename: string             // Sanitized filename on disk
+  savePath: string             // Full absolute path
+  state: DownloadState
+  totalBytes: number           // -1 if unknown
+  receivedBytes: number
+  mimeType: string
+  startTime: number            // epoch ms
+  endTime?: number             // epoch ms
+  error?: string
+  /** Whether this download has been consumed by waitForDownload() */
+  consumed?: boolean
+}
+
+// ============================================
 // Context Interface
 // ============================================
 
@@ -168,6 +196,13 @@ export interface BrowserContextInterface {
   // Dialog handling
   getPendingDialog(): DialogInfo | null
   handleDialog(accept: boolean, promptText?: string): Promise<void>
+
+  // Download handling (consumer API only; registerDownload/updateDownloadProgress
+  // are internal coordination methods on BrowserContext, not part of the public interface)
+  getDownloads(): DownloadInfo[]
+  getDownload(id: string): DownloadInfo | undefined
+  getDownloadDir(): string
+  waitForDownload(timeout?: number): Promise<DownloadInfo>
 
   // Element operations
   clickElement(uid: string, options?: { dblClick?: boolean }): Promise<void>

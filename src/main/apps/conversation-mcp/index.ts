@@ -96,7 +96,8 @@ function buildTools(spaceId: string) {
     'Accepts a full App Spec object (type is forced to "automation"). Returns the new app ID on success.\n\n' +
     'IMPORTANT — Before calling this tool, you MUST confirm the following with the user:\n' +
     '  1. Schedule frequency — ask explicitly (e.g. every 30m / 1h / 24h / 7d, or a cron expression). Do NOT assume.\n' +
-    '  2. Notifications — ask if they want to be notified on completion, and if so via which channel. Options: system desktop notification (output.notify.system: true), or external channels (output.notify.channels: ["email","wecom","dingtalk","feishu","webhook"]). Only ask WHICH channel type — credentials (URLs, tokens, passwords) are already configured by the user in Settings > Notification Channels. Do NOT ask for any URL, secret, or credential.\n' +
+    '  2. Notifications — ask if they want desktop notifications on completion (output.notify.system: true, the default). External channel notifications (email, webhook, etc.) are AI-driven: during each run the digital human decides whether to notify via the notify_channel tool based on configured channels in Settings. No need to configure channels per-app.\n' +
+    '  2b. IM Push — ask if they want the digital human to proactively send messages to IM contacts (e.g., WeCom bot chats). If yes, add "im-push" to permissions[]. The AI will use the notify_bot tool to decide when and whom to message.\n' +
     '  3. User-specific values — if the task requires URLs, keywords, API endpoints, or other dynamic inputs, define them as config_schema fields so the user can fill them in, rather than hardcoding guessed values.\n' +
     'Do NOT call this tool until you have the user\'s answers to the above. Guessing these values leads to a poor experience.\n\n' +
     'CRITICAL — config_schema restrictions:\n' +
@@ -114,10 +115,10 @@ function buildTools(spaceId: string) {
     '    { source: { type: "rss", config: { url?: string } } }\n' +
     '    { source: { type: "custom", config: Record<string,unknown> } }\n' +
     '  requires?: { mcps?: [{ id: string, reason?: string }], skills?: string[] } — External MCP/skill dependencies\n' +
-    '  output?: { notify?: { system?: boolean, channels?: ["email"|"wecom"|"dingtalk"|"feishu"|"webhook"] }, format?: string } — notification config for completed runs\n' +
+    '  output?: { notify?: { system?: boolean }, format?: string } — notification config (system desktop notification). External channel notifications are AI-driven at runtime.\n' +
     '  filters?: array — Filter rules: [{ field: string, op: "eq"|"neq"|"contains"|"matches"|"gt"|"lt"|"gte"|"lte", value: any }]\n' +
     '  config_schema?: array — User configuration fields: [{ key, label, type: "url"|"text"|"string"|"number"|"select"|"boolean"|"email", required?, description?, default?, placeholder?, options?: [{label,value}] }]\n' +
-    '  permissions?: string[] — e.g. ["ai-browser"]\n' +
+    '  permissions?: string[] — e.g. ["ai-browser", "im-push"]\n' +
     '  memory_schema?: Record<string, { type: string, description?: string }> — Persistent memory fields\n' +
     '  escalation?: { enabled?: boolean, timeout_hours?: number }\n' +
     '  version?: string (default "1.0")\n' +

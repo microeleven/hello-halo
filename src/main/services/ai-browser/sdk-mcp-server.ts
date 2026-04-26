@@ -4,6 +4,23 @@
  * Creates an in-process MCP server using Claude Agent SDK's
  * tool() and createSdkMcpServer() functions.
  *
+ * ┌─────────────────────────────────────────────────────────────────┐
+ * │ ENTRY POINT MANIFEST                                           │
+ * │                                                                 │
+ * │ createAIBrowserMcpServer() is the PRIMARY entry point for the  │
+ * │ AI Browser module. All session-level side effects (download     │
+ * │ handler, etc.) MUST be initialized here — not in a separate    │
+ * │ init function — because this is the only path guaranteed to    │
+ * │ run before any tool is called.                                  │
+ * │                                                                 │
+ * │ Callers:                                                        │
+ * │   1. services/agent/send-message.ts  — Main chat (global ctx)  │
+ * │   2. apps/runtime/app-chat.ts        — App chat (scoped ctx)   │
+ * │   3. apps/runtime/execute.ts         — Automation (scoped ctx) │
+ * │                                                                 │
+ * │ When adding new session-level side effects, add them HERE.     │
+ * └─────────────────────────────────────────────────────────────────┘
+ *
  * Tool implementations live in tools/ by category:
  *   tools/navigation.ts  — 8 tools (list, select, new, close, navigate, wait, resize, dialog)
  *   tools/input.ts       — 7 tools (click, hover, fill, fill_form, drag, press_key, upload)
@@ -13,6 +30,7 @@
  *   tools/console.ts     — 2 tools (console, console_message)
  *   tools/emulation.ts   — 1 tool  (emulate)
  *   tools/performance.ts — 3 tools (perf_start, perf_stop, perf_insight)
+ *   tools/download.ts    — 1 tool  (download)
  *   tools/helpers.ts     — shared utilities (withTimeout, textResult, etc.)
  *   tools/index.ts       — aggregation (buildAllTools)
  */
@@ -20,9 +38,13 @@
 import { createSdkMcpServer } from '../agent/resolved-sdk'
 import { browserContext, type BrowserContext } from './context'
 import { buildAllTools } from './tools'
+import { installDownloadHandler } from './download-handler'
 
 /**
  * Create AI Browser SDK MCP Server.
+ *
+ * This is the primary entry point for the AI Browser module. All
+ * session-level side effects are initialized here (idempotently).
  *
  * @param scopedContext - Optional scoped BrowserContext for isolation.
  *   When provided, all tools operate on this context's activeViewId
@@ -35,6 +57,12 @@ import { buildAllTools } from './tools'
  *   when omitted.
  */
 export function createAIBrowserMcpServer(scopedContext?: BrowserContext, workDir?: string) {
+  // ── Session-level side effects (idempotent) ──────────────────────
+  // Register the will-download handler on persist:browser session so
+  // AI-initiated downloads are saved silently (no Save-As dialog).
+  installDownloadHandler()
+
+  // ── Build context and tools ──────────────────────────────────────
   const ctx = scopedContext ?? browserContext
   if (workDir !== undefined) {
     ctx.workDir = workDir
@@ -45,12 +73,4 @@ export function createAIBrowserMcpServer(scopedContext?: BrowserContext, workDir
     version: '1.0.0',
     tools
   })
-}
-
-/**
- * Get all AI Browser tool names
- */
-export function getAIBrowserSdkToolNames(): string[] {
-  // Build tools with default context just to extract names
-  return buildAllTools(browserContext).map(t => t.name)
 }

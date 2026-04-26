@@ -248,27 +248,47 @@ export interface ImChannelInstance {
 // ============================================
 
 /**
+ * Branded file reference produced by `FileExportGate.sanction()`.
+ *
+ * Re-exported here so channel adapters can reference the type without
+ * importing from the runtime layer (shared/ must not depend on main/).
+ * The runtime's `FileExportGate` is the sole producer of this type.
+ */
+export interface SanctionedFile {
+  /** Brand — prevents ad-hoc construction outside FileExportGate */
+  readonly [sanctionedBrand]: true
+  /** Absolute real path (symlinks resolved) to the file */
+  readonly resolvedPath: string
+  /** Display name for the file (basename of resolved path) */
+  readonly displayName: string
+}
+
+/** @internal Brand symbol for SanctionedFile — not meant for external use */
+declare const sanctionedBrand: unique symbol
+
+/**
  * Channel-agnostic file sending interface.
  *
  * Implemented by channel adapters that support outbound file delivery.
  * The adapter handles all platform-specific upload logic (chunked WebSocket
  * upload for WeCom, HTTP multipart for Feishu, etc.).
+ *
+ * Security: `sendFile` accepts only a `SanctionedFile` (validated by
+ * `FileExportGate`) to prevent path-traversal exfiltration.
  */
 export interface ImFileCapability {
   /**
-   * Upload a local file and send it to the specified chat.
+   * Upload a sanctioned file and send it to the specified chat.
    *
    * @param chatId - Target platform-side conversation ID
-   * @param filePath - Absolute path to the local file
+   * @param file - A SanctionedFile produced by FileExportGate.sanction()
    * @param chatType - Conversation type ('direct' | 'group')
-   * @param filename - Display filename (defaults to basename of filePath)
    * @returns true if sent successfully, false on recoverable failure
    */
   sendFile(
     chatId: string,
-    filePath: string,
+    file: SanctionedFile,
     chatType: 'direct' | 'group',
-    filename?: string
   ): Promise<boolean>
 }
 
@@ -279,8 +299,8 @@ export interface ImFileCapability {
 /**
  * Channel adapter interface for proactive message pushing.
  *
- * This is the minimal interface used by the runtime service
- * (forwardResultToIm) to push messages to IM channels.
+ * This is the minimal interface for pushing messages to IM channels.
+ * Used by notify_bot (via ImChannelInstance) for AI-driven notifications.
  * ImChannelInstance extends this interface.
  */
 export interface ImChannelAdapter {
@@ -359,7 +379,10 @@ export interface ImSessionRecord {
   lastSender?: string
   /** Most recent message preview (truncated to 50 chars) */
   lastMessage?: string
-  /** Whether proactive pushing is enabled (default: false) */
+  /**
+   * @deprecated Proactive push is now AI-driven via the notify_bot tool.
+   * This field is retained for backward compatibility but ignored at runtime.
+   */
   proactive: boolean
   /** Last activity timestamp (epoch ms) */
   lastActiveAt: number

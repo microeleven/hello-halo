@@ -625,13 +625,13 @@ function InstanceCard({
               onChange={(e) => handleReplyScopeChange(e.target.value)}
               className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
             >
-              <option value="group">{t('Group chats only')}</option>
               <option value="all">{t('All messages')}</option>
+              <option value="group">{t('Group chats only')}</option>
               <option value="direct">{t('Direct messages only')}</option>
             </select>
             {replyScope === 'all' && (
-              <p className="text-xs text-amber-500">
-                {t('Caution: Enabling direct messages allows any user to interact with this digital human privately')}
+              <p className="text-xs text-muted-foreground">
+                {t('Enabling direct messages allows any user to interact with this digital human privately')}
               </p>
             )}
             {replyScope === 'group' && (
@@ -1280,7 +1280,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       enabled: false,
       appId: '',
       config: { botId: '', secret: '', wsUrl: '' },
-      replyScope: 'group', // Secure default for new instances
+      replyScope: 'all', // Default to all messages
       permissionEnabled: pd?.defaultEnabled ?? false,
       ...(pd?.defaultEnabled ? {
         guestPolicy: pd.defaultGuestAccess

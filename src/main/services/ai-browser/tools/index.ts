@@ -14,9 +14,10 @@ import { buildNetworkTools } from './network'
 import { buildConsoleTools } from './console'
 import { buildEmulationTools } from './emulation'
 import { buildPerformanceTools } from './performance'
+import { buildDownloadTools } from './download'
 
 /**
- * Build all 27 AI Browser tools, closing over the provided BrowserContext.
+ * Build all 28 AI Browser tools, closing over the provided BrowserContext.
  * This allows each MCP server instance to operate on its own context
  * (scoped activeViewId) while sharing the same browserViewManager session.
  */
@@ -30,5 +31,6 @@ export function buildAllTools(ctx: BrowserContext) {
     ...buildConsoleTools(ctx),         // 2 tools
     ...buildEmulationTools(ctx),       // 1 tool
     ...buildPerformanceTools(ctx),     // 3 tools
+    ...buildDownloadTools(ctx),        // 1 tool
   ]
 }
