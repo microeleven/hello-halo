@@ -570,6 +570,179 @@ export function getCacheStats(spaceId: string): {
   }
 }
 
+// ============================================
+// Reconciliation (Push + Pull Recovery)
+// ============================================
+
+// Cooldown guard: minimum interval between reconciliations (per space)
+const RECONCILE_COOLDOWN_MS = 2000
+const lastReconcileTime = new Map<string, number>()
+
+/**
+ * Reconcile all loaded directories against actual filesystem state.
+ *
+ * For each directory previously loaded into cache (tracked via loadedDirs),
+ * re-scans via worker, diffs against cached treeNodes, and broadcasts
+ * corrections through the existing artifact:tree-update channel.
+ *
+ * Designed to recover from missed @parcel/watcher events (OS queue overflow,
+ * App Nap, race conditions). Triggered on window focus and manual refresh.
+ */
+export async function reconcileLoadedDirs(spaceId: string): Promise<void> {
+  const cache = cacheMap.get(spaceId)
+  if (!cache || cache.loadedDirs.size === 0) return
+
+  // Cooldown guard: prevent rapid-fire reconciliation
+  const now = Date.now()
+  const lastTime = lastReconcileTime.get(spaceId) || 0
+  if (now - lastTime < RECONCILE_COOLDOWN_MS) {
+    console.debug(`[ArtifactCache] Reconcile skipped for ${spaceId} (cooldown)`)
+    return
+  }
+  lastReconcileTime.set(spaceId, now)
+
+  const dirsToCheck = Array.from(cache.loadedDirs)
+  let changedDirCount = 0
+  const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
+
+  console.debug(`[ArtifactCache] Reconciling ${dirsToCheck.length} loaded dirs for space: ${spaceId}`)
+
+  // Scan all loaded directories in parallel via worker (off main thread)
+  const scanResults = await Promise.allSettled(
+    dirsToCheck.map(async (dirPath) => {
+      const relPath = dirPath === cache.rootPath ? '' : relative(cache.rootPath, dirPath)
+      const depth = relPath ? relPath.split(/[\\/]/).length : 0
+      const freshNodes = await scanTreeViaWorker(spaceId, dirPath, cache.rootPath, depth + 1)
+      return { dirPath, freshNodes }
+    })
+  )
+
+  for (let i = 0; i < scanResults.length; i++) {
+    const result = scanResults[i]
+    if (result.status === 'rejected') {
+      // Directory was likely deleted while we were away — clean up from cache
+      const failedDir = dirsToCheck[i]
+      const error = result.reason as Error
+      console.warn(`[ArtifactCache] Reconcile scan failed for ${failedDir}: ${error.message}. Removing from cache.`)
+      removeTreeNodeDescendants(cache, failedDir)
+      cache.flatItems.delete(failedDir)
+      // Remove from parent's treeNodes children list
+      const parentDir = failedDir.substring(0, Math.max(failedDir.lastIndexOf('/'), failedDir.lastIndexOf('\\')))
+      if (parentDir && cache.treeNodes.has(parentDir)) {
+        const parentChildren = cache.treeNodes.get(parentDir)!
+        cache.treeNodes.set(parentDir, parentChildren.filter(n => n.path !== failedDir))
+      }
+      changedDirCount++
+      // Broadcast parent dir update so UI removes the dead entry
+      if (parentDir && cache.treeNodes.has(parentDir)) {
+        updatedDirs.push({ dirPath: parentDir, children: cache.treeNodes.get(parentDir)! })
+      }
+      continue
+    }
+
+    const { dirPath, freshNodes } = result.value
+    const cachedNodes = cache.treeNodes.get(dirPath)
+
+    // If directory no longer has cache entry (was removed during scan), skip
+    if (!cache.loadedDirs.has(dirPath)) continue
+
+    // Diff: compare cached vs fresh by building path-keyed maps
+    const hasChanged = diffTreeNodes(cachedNodes, freshNodes)
+    if (!hasChanged) continue
+
+    // Apply fresh state to cache
+    changedDirCount++
+    cache.treeNodes.set(dirPath, freshNodes)
+
+    // Update flatItems: remove stale entries, add new ones
+    if (cachedNodes) {
+      const freshPaths = new Set(freshNodes.map(n => n.path))
+      for (const oldNode of cachedNodes) {
+        if (!freshPaths.has(oldNode.path)) {
+          cache.flatItems.delete(oldNode.path)
+          // If removed item was a tracked directory, clean up descendants
+          if (oldNode.type === 'folder') {
+            removeTreeNodeDescendants(cache, oldNode.path)
+          }
+        }
+      }
+    }
+    for (const freshNode of freshNodes) {
+      if (freshNode.type === 'file') {
+        addToFlatItemsCache(cache, freshNode.path, {
+          id: freshNode.path,
+          spaceId,
+          name: freshNode.name,
+          type: 'file',
+          path: freshNode.path,
+          relativePath: relative(cache.rootPath, freshNode.path),
+          extension: freshNode.name.includes('.') ? freshNode.name.slice(freshNode.name.lastIndexOf('.')) : '',
+          icon: '',
+          createdAt: new Date().toISOString(),
+          size: freshNode.size,
+        })
+      }
+    }
+
+    updatedDirs.push({ dirPath, children: freshNodes })
+  }
+
+  // Broadcast changes through existing channel if anything changed
+  if (updatedDirs.length > 0) {
+    cache.lastUpdate = Date.now()
+    const treeUpdateEvent: ArtifactTreeUpdateEvent = {
+      spaceId,
+      updatedDirs,
+      changes: [] // No individual change events — this is a bulk reconciliation
+    }
+    broadcastToAllClients('artifact:tree-update', treeUpdateEvent as unknown as Record<string, unknown>)
+    console.log(`[ArtifactCache] Reconciled ${changedDirCount}/${dirsToCheck.length} dirs with changes for space: ${spaceId}`)
+  } else {
+    console.debug(`[ArtifactCache] Reconcile complete: no drift detected (${dirsToCheck.length} dirs checked)`)
+  }
+}
+
+/**
+ * Reconcile ALL cached spaces. Called on window focus.
+ */
+export async function reconcileAllSpaces(): Promise<void> {
+  const spaceIds = Array.from(cacheMap.keys())
+  if (spaceIds.length === 0) return
+
+  await Promise.allSettled(
+    spaceIds.map(spaceId => reconcileLoadedDirs(spaceId))
+  )
+}
+
+/**
+ * Compare two tree node arrays for differences.
+ * Returns true if any difference is detected (add, remove, or attribute change).
+ */
+function diffTreeNodes(
+  cached: CachedTreeNode[] | undefined,
+  fresh: CachedTreeNode[]
+): boolean {
+  if (!cached) return fresh.length > 0
+  if (cached.length !== fresh.length) return true
+
+  // Build path → node map for O(n) comparison
+  const cachedMap = new Map<string, CachedTreeNode>()
+  for (const node of cached) {
+    cachedMap.set(node.path, node)
+  }
+
+  for (const freshNode of fresh) {
+    const cachedNode = cachedMap.get(freshNode.path)
+    if (!cachedNode) return true // New file/folder
+    // Check for type change or size change (covers most meaningful changes)
+    if (cachedNode.type !== freshNode.type) return true
+    if (cachedNode.type === 'file' && freshNode.type === 'file' &&
+        cachedNode.size !== freshNode.size) return true
+  }
+
+  return false
+}
+
 /**
  * Force refresh cache for a space
  */

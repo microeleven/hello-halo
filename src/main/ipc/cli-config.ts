@@ -14,6 +14,8 @@ import { homedir } from 'os'
 import { stat, readdir, mkdir, cp, readFile, access } from 'fs/promises'
 import { getConfig, saveConfig, resolveClaudeConfigDir } from '../services/config.service'
 import type { McpServerConfig } from '../services/config.service'
+import { getAppManager, AppAlreadyInstalledError } from '../apps/manager'
+import type { McpSpec } from '../apps/spec/schema'
 
 // ============================================
 // Path helpers
@@ -162,8 +164,6 @@ export function registerCliConfigHandlers(): void {
     console.log('[CliConfig] cli-config:scan-mcp')
     try {
       const ccJsonPath = join(homedir(), '.claude.json')
-      const haloConfig = getConfig()
-      const haloMcpServers: Record<string, unknown> = haloConfig.mcpServers ?? {}
 
       if (!(await pathExists(ccJsonPath))) {
         return { success: true, data: { servers: [], ccJsonPath } }
@@ -176,12 +176,24 @@ export function registerCliConfigHandlers(): void {
         return { success: false, error: 'Failed to parse ~/.claude.json' }
       }
 
+      // Check against App Manager DB (the active data source) instead of config.json
+      const manager = getAppManager()
+      const installedMcpNames = new Set<string>()
+      if (manager) {
+        const globalMcps = manager.listApps({ type: 'mcp', spaceId: null })
+        for (const app of globalMcps) {
+          if (app.status !== 'uninstalled') {
+            installedMcpNames.add(app.specId)
+          }
+        }
+      }
+
       const ccServers = (ccData.mcpServers ?? {}) as Record<string, unknown>
       const servers = Object.entries(ccServers).map(([name, ccConfig]) => ({
         name,
         ccConfig,
-        haloConfig: haloMcpServers[name],
-        exists: name in haloMcpServers,
+        haloConfig: installedMcpNames.has(name) ? ccConfig : undefined,
+        exists: installedMcpNames.has(name),
       }))
 
       console.log(`[CliConfig] scan-mcp: found ${servers.length} CC MCP servers`)
@@ -214,10 +226,12 @@ export function registerCliConfigHandlers(): void {
           return { success: false, error: 'Failed to parse ~/.claude.json' }
         }
 
-        const ccServers = (ccData.mcpServers ?? {}) as Record<string, McpServerConfig>
-        const haloConfig = getConfig()
-        const haloMcpServers: Record<string, McpServerConfig> = { ...(haloConfig.mcpServers ?? {}) }
+        const manager = getAppManager()
+        if (!manager) {
+          return { success: false, error: 'App Manager not initialized' }
+        }
 
+        const ccServers = (ccData.mcpServers ?? {}) as Record<string, McpServerConfig>
         const results: Array<{ name: string; status: 'merged' | 'skipped' | 'error'; error?: string }> = []
 
         for (const { name, action } of actions) {
@@ -227,17 +241,22 @@ export function registerCliConfigHandlers(): void {
           }
 
           try {
-            haloMcpServers[name] = ccServers[name]
-            console.log(`[CliConfig] Merged MCP server: ${name}`)
+            const spec = ccMcpConfigToSpec(name, ccServers[name])
+            await manager.install(null, spec, buildUserConfigFromEnv(ccServers[name]))
+            console.log(`[CliConfig] Migrated MCP server to DB: ${name}`)
             results.push({ name, status: 'merged' })
           } catch (err: unknown) {
-            const e = err as Error
-            results.push({ name, status: 'error', error: e.message })
+            // Already installed is not an error — treat as success
+            if (err instanceof AppAlreadyInstalledError) {
+              console.log(`[CliConfig] MCP server '${name}' already installed, skipping`)
+              results.push({ name, status: 'skipped' })
+            } else {
+              const e = err as Error
+              console.error(`[CliConfig] Failed to migrate MCP server '${name}':`, e.message)
+              results.push({ name, status: 'error', error: e.message })
+            }
           }
         }
-
-        // Persist updated mcpServers to Halo config
-        saveConfig({ mcpServers: haloMcpServers })
 
         const mergedCount = results.filter(r => r.status === 'merged').length
         console.log(`[CliConfig] MCP migration complete: ${mergedCount}/${actions.length} merged`)
@@ -301,4 +320,146 @@ export function registerCliConfigHandlers(): void {
   )
 
   console.log('[CliConfig] CLI config handlers registered')
+}
+
+// ============================================
+// CC config → McpSpec conversion helpers
+// ============================================
+
+/**
+ * Convert a Claude Code MCP server config (from ~/.claude.json) into a valid
+ * Halo McpSpec for installation into the App Manager DB.
+ */
+function ccMcpConfigToSpec(name: string, config: McpServerConfig): McpSpec {
+  const typed = config as Record<string, unknown>
+  const transport = inferTransport(typed)
+
+  const spec: McpSpec = {
+    spec_version: '1',
+    name,
+    type: 'mcp',
+    version: '1.0',
+    author: 'Claude Code',
+    description: `Migrated from Claude Code: ${name}`,
+    mcp_server: {
+      transport,
+      command: transport === 'stdio'
+        ? (typed.command as string) || name
+        : (typed.url as string) || name,
+    },
+  }
+
+  // stdio-specific fields
+  if (transport === 'stdio') {
+    if (Array.isArray(typed.args) && typed.args.length > 0) {
+      spec.mcp_server.args = typed.args as string[]
+    }
+    if (typeof typed.cwd === 'string') {
+      spec.mcp_server.cwd = typed.cwd
+    }
+  }
+
+  // headers (sse / http)
+  if (typed.headers && typeof typed.headers === 'object' && Object.keys(typed.headers as object).length > 0) {
+    spec.mcp_server.headers = typed.headers as Record<string, string>
+  }
+
+  // env goes into the spec as default env (user-provided values go into userConfig)
+  // We intentionally keep env empty in spec and put everything in userConfig
+  // so that user can edit them via the UI config form.
+
+  return spec
+}
+
+/**
+ * Infer the MCP transport type from CC config shape.
+ */
+function inferTransport(config: Record<string, unknown>): 'stdio' | 'sse' | 'streamable-http' {
+  const type = config.type as string | undefined
+  if (type === 'sse') return 'sse'
+  if (type === 'http') return 'streamable-http'
+  if (typeof config.url === 'string' && !config.command) {
+    // Has URL but no command — network transport (sse already handled above)
+    return 'streamable-http'
+  }
+  return 'stdio'
+}
+
+/**
+ * Extract env vars from CC config as userConfig values.
+ * CC stores env vars directly in the MCP config; Halo stores them as userConfig
+ * which get merged into env at runtime (via getDbMcpServers in helpers.ts).
+ */
+function buildUserConfigFromEnv(config: McpServerConfig): Record<string, unknown> {
+  const typed = config as Record<string, unknown>
+  const env = typed.env as Record<string, string> | undefined
+  if (!env || typeof env !== 'object') return {}
+  // Copy all env vars as userConfig entries
+  const userConfig: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(env)) {
+    userConfig[key] = value
+  }
+  return userConfig
+}
+
+// ============================================
+// One-time migration: config.json mcpServers → DB
+// ============================================
+
+/**
+ * Migrate any MCP servers stored in the legacy config.json.mcpServers
+ * into the App Manager DB. This handles MCPs that were previously migrated
+ * from CC but written to the dead config.json path (Issue #74).
+ *
+ * Safe to call multiple times — skips already-installed MCPs.
+ * Should be called after initAppManager() during startup.
+ */
+export async function migrateConfigMcpToDb(): Promise<void> {
+  const config = getConfig()
+  const legacyMcpServers = config.mcpServers
+  if (!legacyMcpServers || Object.keys(legacyMcpServers).length === 0) {
+    return
+  }
+
+  const manager = getAppManager()
+  if (!manager) {
+    console.warn('[CliConfig] Cannot migrate config.mcpServers: App Manager not initialized')
+    return
+  }
+
+  console.log(`[CliConfig] Migrating ${Object.keys(legacyMcpServers).length} legacy config.mcpServers to DB...`)
+
+  let migrated = 0
+  let skipped = 0
+  let failed = 0
+  // Track entries that failed so we can preserve them for retry on next startup.
+  const failedEntries: Record<string, McpServerConfig> = {}
+
+  for (const [name, mcpConfig] of Object.entries(legacyMcpServers)) {
+    try {
+      const spec = ccMcpConfigToSpec(name, mcpConfig)
+      await manager.install(null, spec, buildUserConfigFromEnv(mcpConfig))
+      console.log(`[CliConfig] Migrated legacy MCP '${name}' to DB`)
+      migrated++
+    } catch (err: unknown) {
+      if (err instanceof AppAlreadyInstalledError) {
+        // Already in DB — expected if user already installed via App Store
+        skipped++
+      } else {
+        const e = err as Error
+        console.error(`[CliConfig] Failed to migrate legacy MCP '${name}':`, e.message)
+        failed++
+        failedEntries[name] = mcpConfig
+      }
+    }
+  }
+
+  // Write back only entries that failed — they will be retried on next startup.
+  // Successfully migrated and skipped entries are cleared from config.json;
+  // the DB is now their source of truth.
+  saveConfig({ mcpServers: failedEntries })
+  if (failed > 0) {
+    console.warn(`[CliConfig] ${failed} MCP(s) failed to migrate — preserved in config.json for retry on next startup`)
+  }
+  console.log(`[CliConfig] Legacy config.mcpServers migration complete: ${migrated} migrated, ${skipped} skipped, ${failed} failed`)
 }

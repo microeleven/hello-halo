@@ -196,6 +196,7 @@ import { initAnalytics } from './services/analytics'
 import { registerProtocols } from './services/protocol.service'
 import { setMainWindow } from './services/window.service'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
+import { reconcileAllSpaces } from './services/artifact-cache.service'
 import { initSdk } from './services/agent/resolved-sdk'
 
 let mainWindow: BrowserWindow | null = null
@@ -421,6 +422,13 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     setMainWindow(null)
     mainWindow = null
+  })
+
+  // Reconcile artifact caches on window focus (recover missed watcher events)
+  mainWindow.on('focus', () => {
+    reconcileAllSpaces().catch((err) => {
+      console.error('[Main] Artifact reconciliation error on focus:', err)
+    })
   })
 
   // Notify all subscribers about the new window

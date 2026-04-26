@@ -12,7 +12,6 @@ import type { McpServerStatusInfo } from './types'
 import {
   getHeadlessElectronPath,
   getApiCredentials,
-  getEnabledMcpServers,
   getDbMcpServers,
   inferOpenAIWireApi,
   credentialsToBackendConfig

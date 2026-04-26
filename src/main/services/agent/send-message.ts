@@ -18,10 +18,7 @@
 
 import { getConfig } from '../config.service'
 import { addMessage } from '../conversation.service'
-import {
-  AI_BROWSER_SYSTEM_PROMPT,
-  createAIBrowserMcpServer
-} from '../ai-browser'
+import { createAIBrowserMcpServer } from '../ai-browser'
 import { createWebSearchMcpServer } from '../web-search'
 import { createHaloAppsMcpServer } from '../../apps/conversation-mcp'
 import type {
@@ -35,7 +32,6 @@ import {
   getDbMcpServers
 } from './helpers'
 import { emitAgentEvent } from './events'
-import { buildSystemPromptWithAIBrowser } from './system-prompt'
 import {
   getOrCreateV2Session,
   closeV2Session,
@@ -134,15 +130,10 @@ export async function sendMessage(
       customConfigDir: config.agent?.customConfigDir,
       enableTeams: config.agent?.enableTeams,
       disabledTools: config.agent?.disabledTools,
+      aiBrowserEnabled: !!aiBrowserEnabled,
     })
 
-    // Apply dynamic configurations (AI Browser, Thinking mode)
-    if (aiBrowserEnabled) {
-      sdkOptions.systemPrompt = buildSystemPromptWithAIBrowser(
-        { workDir, modelInfo: resolvedCredentials.displayModel, promptProfile: config.agent?.promptProfile },
-        AI_BROWSER_SYSTEM_PROMPT
-      )
-    }
+    // Apply dynamic configurations (Thinking mode)
     if (thinkingEnabled) {
       sdkOptions.maxThinkingTokens = 10240
     }

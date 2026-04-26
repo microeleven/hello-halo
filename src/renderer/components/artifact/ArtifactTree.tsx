@@ -16,7 +16,7 @@ import { api } from '../../api'
 import { useCanvasStore } from '../../stores/canvas.store'
 import type { ArtifactTreeNode, ArtifactTreeUpdateEvent } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
-import { ChevronRight, ChevronDown, Download, Eye, Loader2, FilePlus, FolderPlus, Edit3, Trash2, FolderOpen, Copy } from 'lucide-react'
+import { ChevronRight, ChevronDown, Download, Eye, Loader2, FilePlus, FolderPlus, Edit3, Trash2, FolderOpen, Copy, RefreshCw } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { canOpenInCanvas } from '../../constants/file-types'
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
@@ -634,19 +634,26 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
                 {t('Files')}
               </span>
               <div className="flex gap-1">
-                <button 
+                <button
                   onClick={handleNewFile}
                   className="p-1 hover:bg-secondary/60 rounded transition-colors"
                   title={t('New File')}
                 >
                   <FilePlus className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
                 </button>
-                <button 
+                <button
                   onClick={handleNewFolder}
                   className="p-1 hover:bg-secondary/60 rounded transition-colors"
                   title={t('New Folder')}
                 >
                   <FolderPlus className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
+                </button>
+                <button
+                  onClick={() => { api.reconcileArtifacts(spaceId) }}
+                  className="p-1 hover:bg-secondary/60 rounded transition-colors"
+                  title={t('Refresh file tree')}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
                 </button>
               </div>
             </div>

@@ -11,7 +11,8 @@
  */
 
 import type { AppSpec } from '../spec'
-import { buildSystemPrompt } from '../../services/agent/system-prompt'
+import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
+import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 
 // ============================================
 // Chat Context Overlay
@@ -156,10 +157,13 @@ export function buildAppChatSystemPrompt(options: AppChatPromptOptions): string 
   const sections: string[] = []
 
   // 1. Full main Agent system prompt
-  sections.push(buildSystemPrompt({
-    workDir: options.workDir,
-    modelInfo: options.modelInfo,
-  }))
+  //    When AI Browser is enabled, append full browser tool workflow guide
+  const promptCtx = { workDir: options.workDir, modelInfo: options.modelInfo, aiBrowserEnabled: options.usesAIBrowser }
+  sections.push(
+    options.usesAIBrowser
+      ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
+      : buildSystemPrompt(promptCtx)
+  )
 
   // 2. App Chat context overlay
   sections.push(APP_CHAT_CONTEXT)

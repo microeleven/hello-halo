@@ -178,6 +178,7 @@ export interface HaloAPI {
       item?: unknown
     }>
   }) => void) => () => void
+  reconcileArtifacts: (spaceId: string) => Promise<IpcResponse>
   openArtifact: (filePath: string) => Promise<IpcResponse>
   showArtifactInFolder: (filePath: string) => Promise<IpcResponse>
   readArtifactContent: (filePath: string) => Promise<IpcResponse>
@@ -577,6 +578,7 @@ const api: HaloAPI = {
   initArtifactWatcher: (spaceId) => ipcRenderer.invoke('artifact:init-watcher', spaceId),
   onArtifactChanged: (callback) => createEventListener('artifact:changed', callback),
   onArtifactTreeUpdate: (callback) => createEventListener('artifact:tree-update', callback),
+  reconcileArtifacts: (spaceId) => ipcRenderer.invoke('artifact:reconcile', spaceId),
   openArtifact: (filePath) => ipcRenderer.invoke('artifact:open', filePath),
   showArtifactInFolder: (filePath) => ipcRenderer.invoke('artifact:show-in-folder', filePath),
   readArtifactContent: (filePath) => ipcRenderer.invoke('artifact:read-content', filePath),

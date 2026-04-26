@@ -109,6 +109,16 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Phase 2: App Manager ─────────────────────────────────────────────────
   const appManager = await initAppManager({ db })
 
+  // ── Phase 2.5: Migrate legacy config.mcpServers → DB ────────────────────
+  // One-time migration: config.json mcpServers (dead storage from Issue #74)
+  // are imported into the App Manager DB where getDbMcpServers() can read them.
+  try {
+    const { migrateConfigMcpToDb } = await import('../ipc/cli-config')
+    await migrateConfigMcpToDb()
+  } catch (err) {
+    console.warn('[Bootstrap] Failed to run config.mcpServers migration:', err)
+  }
+
   // ── Phase 3: App Runtime ─────────────────────────────────────────────────
   // initAppRuntime creates the EventRouter internally, wires source adapters
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.

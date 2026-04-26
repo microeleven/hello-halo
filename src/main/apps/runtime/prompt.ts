@@ -15,7 +15,8 @@
 import type { AutomationSpec } from '../spec'
 import type { MemorySnapshot } from '../../platform/memory/snapshot'
 import type { EscalationResponse } from './types'
-import { buildSystemPrompt } from '../../services/agent/system-prompt'
+import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
+import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 
 // ============================================
 // Automation Context Overlay
@@ -183,10 +184,13 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
 
   // 1. Full main Agent system prompt — gives the automation agent
   //    100% of the same capabilities as the interactive agent
-  sections.push(buildSystemPrompt({
-    workDir: options.workDir,
-    modelInfo: options.modelInfo,
-  }))
+  //    When AI Browser is enabled, append full browser tool workflow guide
+  const promptCtx = { workDir: options.workDir, modelInfo: options.modelInfo, aiBrowserEnabled: options.usesAIBrowser }
+  sections.push(
+    options.usesAIBrowser
+      ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
+      : buildSystemPrompt(promptCtx)
+  )
 
   // 2. Automation context overlay — establishes headless mode,
   //    overrides interaction patterns (escalation vs AskUserQuestion)

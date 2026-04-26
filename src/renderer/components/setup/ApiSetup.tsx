@@ -329,13 +329,13 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
             <div>
               <p className="font-medium text-sm">
                 {provider === 'anthropic'
-                  ? t('Claude (Recommended)')
-                  : t('OpenAI Compatible')}
+                  ? t('Claude (Anthropic) API')
+                  : t('OpenAI API')}
               </p>
               <p className="text-xs text-muted-foreground">
                 {provider === 'openai'
-                  ? t('Support OpenAI/compatible models via local protocol conversion')
-                  : t('Connect directly to Anthropic official or compatible proxy')}
+                  ? t('Official and all compatible providers')
+                  : t('Official and compatible proxies')}
               </p>
             </div>
             <select
@@ -343,8 +343,8 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
               onChange={(e) => handleProviderChange(e.target.value)}
               className="px-3 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors text-sm"
             >
-              <option value="anthropic">{t('Claude (Recommended)')}</option>
-              <option value="openai">{t('OpenAI Compatible')}</option>
+              <option value="anthropic">{t('Claude (Anthropic) API')}</option>
+              <option value="openai">{t('OpenAI API')}</option>
             </select>
           </div>
 

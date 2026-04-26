@@ -635,6 +635,14 @@ export const api = {
     return onEvent('artifact:tree-update', callback)
   },
 
+  // Reconcile artifact cache against filesystem (push + pull recovery)
+  reconcileArtifacts: async (spaceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.reconcileArtifacts(spaceId)
+    }
+    return httpRequest('POST', `/api/spaces/${spaceId}/artifacts/reconcile`)
+  },
+
   openArtifact: async (filePath: string): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.openArtifact(filePath)

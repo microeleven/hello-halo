@@ -101,17 +101,17 @@ export function ProviderSelector({
     if (!providerSearchQuery) return recommendedProviders
     const q = providerSearchQuery.toLowerCase()
     return recommendedProviders.filter(p =>
-      p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
+      t(p.name).toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
     )
-  }, [recommendedProviders, providerSearchQuery])
+  }, [recommendedProviders, providerSearchQuery, t])
 
   const filteredOthers = useMemo(() => {
     if (!providerSearchQuery) return otherProviders
     const q = providerSearchQuery.toLowerCase()
     return otherProviders.filter(p =>
-      p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
+      t(p.name).toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
     )
-  }, [otherProviders, providerSearchQuery])
+  }, [otherProviders, providerSearchQuery, t])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -133,7 +133,7 @@ export function ProviderSelector({
     if (currentProvider && !editingSource) {
       setApiUrl(currentProvider.apiUrl)
       setSelectedModel(currentProvider.models[0]?.id || '')
-      setSourceName(currentProvider.name)
+      setSourceName(t(currentProvider.name))
       setFetchedModels(currentProvider.models)
     }
   }, [selectedProvider, currentProvider, editingSource])
@@ -324,19 +324,19 @@ export function ProviderSelector({
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
         selectedProvider === provider.id ? 'bg-primary/20 text-primary' : 'bg-secondary text-muted-foreground'
       }`}>
-        <span className="text-sm font-bold">{provider.name.charAt(0)}</span>
+        <span className="text-sm font-bold">{t(provider.name).charAt(0)}</span>
       </div>
 
       {/* Provider Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-foreground">{provider.name}</span>
+          <span className="text-sm font-medium text-foreground">{t(provider.name)}</span>
           {showRecommended && provider.recommended && (
             <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
           )}
         </div>
         {provider.description && (
-          <div className="text-xs text-muted-foreground truncate">{provider.description}</div>
+          <div className="text-xs text-muted-foreground truncate">{t(provider.description)}</div>
         )}
       </div>
 
@@ -362,13 +362,13 @@ export function ProviderSelector({
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
               <span className="text-sm font-bold text-primary">
-                {currentProvider?.name.charAt(0) || 'C'}
+                {t(currentProvider?.name || '').charAt(0) || 'C'}
               </span>
             </div>
             <div className="text-left">
-              <div className="text-sm font-medium">{currentProvider?.name || t('Select provider')}</div>
+              <div className="text-sm font-medium">{currentProvider ? t(currentProvider.name) : t('Select provider')}</div>
               {currentProvider?.description && (
-                <div className="text-xs text-muted-foreground">{currentProvider.description}</div>
+                <div className="text-xs text-muted-foreground">{t(currentProvider.description)}</div>
               )}
             </div>
           </div>
@@ -433,7 +433,7 @@ export function ProviderSelector({
         <div className="space-y-4 p-4 bg-secondary/30 rounded-lg border border-border">
           <div className="flex items-center justify-between">
             <h3 className="font-medium text-foreground">
-              {t('Configure')} {currentProvider.name}
+              {t('Configure')} {t(currentProvider.name)}
             </h3>
             {currentProvider.website && (
               <a
@@ -457,7 +457,7 @@ export function ProviderSelector({
               type="text"
               value={sourceName}
               onChange={(e) => setSourceName(e.target.value)}
-              placeholder={currentProvider.name}
+              placeholder={t(currentProvider.name)}
               className="w-full px-3 py-2 bg-input border border-border rounded-lg
                        text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
             />

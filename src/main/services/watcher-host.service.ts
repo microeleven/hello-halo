@@ -17,6 +17,16 @@ import type {
 } from '../../shared/protocol/file-watcher.protocol'
 import type { CachedTreeNode, CachedArtifact } from '../../shared/types/artifact'
 
+// Lazy import to avoid circular dependency (artifact-cache imports from watcher-host)
+let reconcileLoadedDirsLazy: ((spaceId: string) => Promise<void>) | null = null
+async function getReconcileFn(): Promise<(spaceId: string) => Promise<void>> {
+  if (!reconcileLoadedDirsLazy) {
+    const mod = await import('./artifact-cache.service')
+    reconcileLoadedDirsLazy = mod.reconcileLoadedDirs
+  }
+  return reconcileLoadedDirsLazy
+}
+
 // --- Worker process management ---
 
 let workerProcess: ChildProcess | null = null
@@ -116,6 +126,19 @@ function restartWithActiveSpaces(): void {
     console.log(`[WatcherHost] Re-initializing space after restart: ${spaceId}`)
     worker.send({ type: 'init-space', spaceId, rootPath } satisfies MainToWorkerMessage)
   }
+  // Reconcile all active spaces after worker restart to recover from
+  // any events missed during the crash-to-restart window
+  getReconcileFn().then(async (reconcile) => {
+    for (const [spaceId] of activeSpaces) {
+      try {
+        await reconcile(spaceId)
+      } catch (err) {
+        console.error(`[WatcherHost] Post-crash reconciliation failed for ${spaceId}:`, err)
+      }
+    }
+  }).catch(err => {
+    console.error('[WatcherHost] Failed to load reconcile function:', err)
+  })
 }
 
 function ensureWorker(): ChildProcess {
@@ -170,6 +193,14 @@ function handleWorkerMessage(msg: WorkerToMainMessage): void {
           console.error('[WatcherHost] fs-events callback error:', err)
         }
       }
+      break
+
+    case 'watcher-error':
+      console.warn(`[WatcherHost] Watcher error for ${msg.spaceId}: ${msg.error}. Triggering reconciliation.`)
+      // Reconcile the affected space to recover from missed events
+      getReconcileFn().then(fn => fn(msg.spaceId)).catch(err => {
+        console.error('[WatcherHost] Post-error reconciliation failed:', err)
+      })
       break
 
     case 'log':

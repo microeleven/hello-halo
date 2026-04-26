@@ -70,6 +70,11 @@ export type WorkerToMainMessage =
       events: ProcessedFsEvent[]
     }
   | {
+      type: 'watcher-error'
+      spaceId: string
+      error: string
+    }
+  | {
       type: 'log'
       level: 'info' | 'warn' | 'error'
       message: string

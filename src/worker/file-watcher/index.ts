@@ -20,7 +20,8 @@ import {
   stopWatcher,
   stopAll,
   refreshIgnoreRules,
-  setOnEventsCallback
+  setOnEventsCallback,
+  setOnErrorCallback
 } from './watcher'
 import {
   scanDirectoryTreeShallow,
@@ -45,6 +46,10 @@ function log(level: 'info' | 'warn' | 'error', message: string): void {
 
 setOnEventsCallback((spaceId, events) => {
   send({ type: 'fs-events', spaceId, events })
+})
+
+setOnErrorCallback((spaceId, error) => {
+  send({ type: 'watcher-error', spaceId, error })
 })
 
 // --- Message handler ---

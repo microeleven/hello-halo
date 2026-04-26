@@ -21,6 +21,7 @@ import {
   listArtifacts,
   listArtifactsTree,
   loadTreeChildren,
+  reconcileArtifacts,
   readArtifactContent,
   saveArtifactContent,
   detectFileType,
@@ -674,6 +675,16 @@ export function registerApiRoutes(app: Express): void {
       }
       const resolvedPath = await createFolder(req.params.spaceId, parentPath || '', name)
       res.json({ success: true, data: { path: resolvedPath } })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // Reconcile artifact cache against filesystem (push + pull recovery)
+  app.post('/api/spaces/:spaceId/artifacts/reconcile', async (req: Request, res: Response) => {
+    try {
+      await reconcileArtifacts(req.params.spaceId)
+      res.json({ success: true })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
     }

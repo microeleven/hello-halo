@@ -344,30 +344,6 @@ export function credentialsToBackendConfig(
   }
 }
 
-// ============================================
-// MCP Server Filtering
-// ============================================
-
-/**
- * Filter out disabled MCP servers before passing to SDK
- */
-export function getEnabledMcpServers(mcpServers: Record<string, any>): Record<string, any> | null {
-  if (!mcpServers || Object.keys(mcpServers).length === 0) {
-    return null
-  }
-
-  const enabled: Record<string, any> = {}
-  for (const [name, config] of Object.entries(mcpServers)) {
-    if (!config.disabled) {
-      // Remove the 'disabled' field before passing to SDK (it's a Halo extension)
-      const { disabled, ...sdkConfig } = config as any
-      enabled[name] = sdkConfig
-    }
-  }
-
-  return Object.keys(enabled).length > 0 ? enabled : null
-}
-
 /**
  * Build MCP servers config from installed MCP apps in the database.
  * Reads effective MCP apps for the given space (global + space-scoped, with override)

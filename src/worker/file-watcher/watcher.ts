@@ -40,15 +40,26 @@ const watchers = new Map<string, SpaceWatcher>()
 // Pending events per space, keyed by path. Last-write-wins within throttle window.
 const pendingEvents = new Map<string, Map<string, ProcessedFsEvent>>()
 let throttleTimer: ReturnType<typeof setTimeout> | null = null
+let maxWaitTimer: ReturnType<typeof setTimeout> | null = null
 const THROTTLE_MS = 300
+const MAX_WAIT_MS = THROTTLE_MS * 5 // 1500ms max wait to prevent starvation
 
 let onEventsCallback: ((spaceId: string, events: ProcessedFsEvent[]) => void) | null = null
+let onErrorCallback: ((spaceId: string, error: string) => void) | null = null
 
 export function setOnEventsCallback(cb: (spaceId: string, events: ProcessedFsEvent[]) => void): void {
   onEventsCallback = cb
 }
 
+export function setOnErrorCallback(cb: (spaceId: string, error: string) => void): void {
+  onErrorCallback = cb
+}
+
 function flushEvents(): void {
+  // Clear both timers on flush
+  if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null }
+  if (maxWaitTimer) { clearTimeout(maxWaitTimer); maxWaitTimer = null }
+
   if (pendingEvents.size === 0) return
 
   for (const [spaceId, eventsMap] of Array.from(pendingEvents.entries())) {
@@ -69,6 +80,10 @@ function queueEvent(spaceId: string, event: ProcessedFsEvent): void {
   pendingEvents.get(spaceId)!.set(event.filePath, event)
 
   if (throttleTimer) clearTimeout(throttleTimer)
+  // Max-wait cap: prevents starvation under sustained activity
+  if (!maxWaitTimer) {
+    maxWaitTimer = setTimeout(flushEvents, MAX_WAIT_MS)
+  }
   throttleTimer = setTimeout(flushEvents, THROTTLE_MS)
 }
 
@@ -159,6 +174,8 @@ export async function startWatcher(spaceId: string, rootPath: string): Promise<v
       async (err, events) => {
         if (err) {
           console.error(`[Watcher] Error for ${spaceId}:`, err)
+          // Notify host process about watcher failure so it can trigger reconciliation
+          onErrorCallback?.(spaceId, String(err))
           return
         }
         await processParcelEvents(sw, events)

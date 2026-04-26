@@ -63,7 +63,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   // ============================================================================
   {
     id: 'anthropic',
-    name: 'Claude (Recommended)',
+    name: 'Claude (Anthropic) API',
     authType: 'api-key',
     apiUrl: 'https://api.anthropic.com',
     models: [
@@ -75,7 +75,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
       { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
     ],
-    description: 'Anthropic official or compatible proxy',
+    description: 'Official and compatible proxies',
     website: 'https://console.anthropic.com/',
     region: 'global',
     recommended: true,
@@ -83,7 +83,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   },
   {
     id: 'openai',
-    name: 'OpenAI Compatible',
+    name: 'OpenAI API',
     authType: 'api-key',
     apiUrl: 'https://api.openai.com/v1',
     modelsUrl: 'https://api.openai.com/v1/models',
@@ -93,7 +93,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
       { id: 'o1', name: 'o1' },
       { id: 'o1-mini', name: 'o1-mini' }
     ],
-    description: 'OpenAI or any compatible API endpoint',
+    description: 'Official and all compatible providers',
     website: 'https://platform.openai.com/',
     region: 'global',
     recommended: true,

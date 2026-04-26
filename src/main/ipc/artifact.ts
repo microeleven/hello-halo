@@ -13,6 +13,7 @@ import {
   listArtifactsTree,
   loadTreeChildren,
   initArtifactWatcher,
+  reconcileArtifacts,
   readArtifactContent,
   saveArtifactContent,
   detectFileType,
@@ -68,6 +69,18 @@ export function registerArtifactHandlers(): void {
       return { success: true }
     } catch (error) {
       console.error('[IPC] artifact:init-watcher error:', error)
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
+  // Reconcile artifact cache against filesystem (push + pull recovery)
+  ipcMain.handle('artifact:reconcile', async (_event, spaceId: string) => {
+    try {
+      console.log(`[IPC] artifact:reconcile - spaceId: ${spaceId}`)
+      await reconcileArtifacts(spaceId)
+      return { success: true }
+    } catch (error) {
+      console.error('[IPC] artifact:reconcile error:', error)
       return { success: false, error: (error as Error).message }
     }
   })

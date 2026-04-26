@@ -63,6 +63,8 @@ export interface SystemPromptContext {
   promptProfile?: PromptProfile
   /** Claude config directory path (defaults to platform-specific path) */
   claudeConfigDir?: string
+  /** Whether AI Browser is currently enabled (controls capability description) */
+  aiBrowserEnabled?: boolean
 }
 
 // ============================================
@@ -82,7 +84,6 @@ If the user asks for help, inform them of Halo's capabilities:
 - General Assistance: Answer questions, provide advice, and help with daily tasks.
 - Get Things Done: Read, edit, and manage files in the current space.
 - Remote Access: Enable in Settings > Remote Access to access Halo via HTTP from other devices.
-- AI Browser: Toggle in bottom-left of input area. Enables ai-browser tools for web automation.
 - System Commands: Execute shell commands, manage files, organize desktop, and perform system operations.
 - Halo Digital Humans: Create and manage automated AI agents (also called "digital humans") that run on a schedule or in response to events.
 
@@ -257,7 +258,6 @@ If the user asks for help, inform them of Halo's capabilities:
 - General Assistance: Answer questions, provide advice, and help with daily tasks.
 - Get Things Done: Read, edit, and manage files in the current space.
 - Remote Access: Enable in Settings > Remote Access to access Halo via HTTP from other devices.
-- AI Browser: Toggle in bottom-left of input area. Enables ai-browser tools for web automation.
 - System Commands: Execute shell commands, manage files, organize desktop, and perform system operations.
 - Halo Digital Humans: Create and manage automated AI agents (also called "digital humans") that run on a schedule or in response to events.
 
@@ -487,7 +487,19 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     ? SYSTEM_PROMPT_OFFICIAL
     : SYSTEM_PROMPT_HALO
 
-  return applyTemplateVariables(template, ctx)
+  let prompt = applyTemplateVariables(template, ctx)
+
+  // When AI Browser is NOT enabled, append guidance so the AI can direct users to enable it.
+  // When enabled, AI_BROWSER_SYSTEM_PROMPT is appended via buildSystemPromptWithAIBrowser instead.
+  if (!ctx.aiBrowserEnabled) {
+    prompt += '\n\n'
+      + '# AI Browser (Not Enabled)\n'
+      + 'You do NOT have browser automation tools in this session. '
+      + 'If the user asks you to browse the web, fill forms, scrape pages, or perform any browser interaction, '
+      + 'tell them to enable AI Browser via the toggle in the bottom-left of the input area, then retry.'
+  }
+
+  return prompt
 }
 
 /**

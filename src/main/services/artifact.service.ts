@@ -21,6 +21,7 @@ import {
   initSpaceCache,
   ensureSpaceCache,
   onArtifactChange,
+  reconcileLoadedDirs,
   type CachedArtifact,
   type CachedTreeNode,
   type ArtifactChangeEvent
@@ -184,6 +185,15 @@ export async function initArtifactWatcher(spaceId: string): Promise<void> {
   }
 
   await ensureSpaceCache(spaceId, workDir)
+}
+
+/**
+ * Reconcile artifact cache against filesystem for a space.
+ * Re-scans all loaded directories and broadcasts corrections.
+ */
+export async function reconcileArtifacts(spaceId: string): Promise<void> {
+  console.log(`[Artifact] reconcileArtifacts for space: ${spaceId}`)
+  await reconcileLoadedDirs(spaceId)
 }
 
 /**
