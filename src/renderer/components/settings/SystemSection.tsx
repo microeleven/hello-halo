@@ -12,6 +12,7 @@ import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { HaloConfig } from '../../types'
 import type { HealthCheckResult, HealthReport } from './types'
+import { Switch } from '../ui/Switch'
 
 interface SystemSectionProps {
   config: HaloConfig | null
@@ -27,6 +28,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
 
   // Proxy settings state
   const [proxyInput, setProxyInput] = useState(config?.network?.proxy || '')
+  const [browserUseProxy, setBrowserUseProxy] = useState(config?.network?.browserUseProxy ?? false)
   const [proxyError, setProxyError] = useState<string | null>(null)
   const [proxySaved, setProxySaved] = useState(false)
   // Health diagnostics state
@@ -188,12 +190,29 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
 
     setProxyError(null)
     try {
-      await api.setConfig({ network: { proxy: value || undefined } })
+      const updatedNetwork = { ...config?.network, proxy: value || undefined }
+      const updatedConfig = { ...config, network: updatedNetwork } as HaloConfig
+      await api.setConfig({ network: updatedNetwork })
+      setConfig(updatedConfig)
       setProxySaved(true)
       setTimeout(() => setProxySaved(false), 2000)
     } catch (error) {
       console.error('[SystemSection] Failed to save proxy:', error)
       setProxyError(t('Failed to save'))
+    }
+  }
+
+  // Handle browser proxy toggle
+  const handleBrowserUseProxyChange = async (enabled: boolean) => {
+    setBrowserUseProxy(enabled)
+    try {
+      const updatedNetwork = { ...config?.network, browserUseProxy: enabled }
+      const updatedConfig = { ...config, network: updatedNetwork } as HaloConfig
+      await api.setConfig({ network: updatedNetwork })
+      setConfig(updatedConfig)
+    } catch (error) {
+      console.error('[SystemSection] Failed to update browserUseProxy:', error)
+      setBrowserUseProxy(!enabled) // Revert on error
     }
   }
 
@@ -348,6 +367,23 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
             <p className="mt-1.5 text-xs text-muted-foreground">
               {t('Supports http://, https://, socks4://, socks5://')}
             </p>
+
+            {/* Browser proxy toggle — only visible when a proxy is configured */}
+            {proxyInput.trim() && (
+              <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
+                <div className="flex-1 min-w-0 mr-3">
+                  <p className="text-sm font-medium">{t('Also apply to AI Browser')}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('By default, AI Browser uses system proxy instead of the proxy above')}
+                  </p>
+                </div>
+                <Switch
+                  checked={browserUseProxy}
+                  onCheckedChange={handleBrowserUseProxyChange}
+                  size="sm"
+                />
+              </div>
+            )}
           </div>
 
           {/* Open Log Folder */}

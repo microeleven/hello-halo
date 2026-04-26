@@ -173,10 +173,14 @@ export function budgetTokensToReasoningEffort(budgetTokens: number | undefined):
  * @see https://platform.openai.com/docs/api-reference/chat/create#reasoning_effort
  */
 export function convertAnthropicThinkingToChatReasoningEffort(
-  thinking: { type: 'enabled' | 'disabled'; budget_tokens?: number } | undefined
+  thinking: { type: string; budget_tokens?: number } | undefined
 ): 'low' | 'medium' | 'high' | undefined {
-  if (!thinking || thinking.type !== 'enabled') return undefined
-  return budgetTokensToReasoningEffort(thinking.budget_tokens)
+  if (!thinking || thinking.type === 'disabled') return undefined
+  // 'adaptive' — Anthropic's unbounded thinking (Claude 4+); map to 'medium'
+  if (thinking.type === 'adaptive') return 'medium'
+  // 'enabled' — fixed budget thinking
+  if (thinking.type === 'enabled') return budgetTokensToReasoningEffort(thinking.budget_tokens)
+  return undefined
 }
 
 /**
@@ -189,8 +193,10 @@ export function convertAnthropicThinkingToChatReasoningEffort(
  * @see https://platform.openai.com/docs/api-reference/responses/create#reasoning
  */
 export function convertAnthropicThinkingToResponsesReasoning(
-  thinking: { type: 'enabled' | 'disabled'; budget_tokens?: number } | undefined
+  thinking: { type: string; budget_tokens?: number } | undefined
 ): { effort: 'low' | 'medium' | 'high' } | undefined {
-  if (!thinking || thinking.type !== 'enabled') return undefined
-  return { effort: budgetTokensToReasoningEffort(thinking.budget_tokens) }
+  if (!thinking || thinking.type === 'disabled') return undefined
+  if (thinking.type === 'adaptive') return { effort: 'medium' }
+  if (thinking.type === 'enabled') return { effort: budgetTokensToReasoningEffort(thinking.budget_tokens) }
+  return undefined
 }

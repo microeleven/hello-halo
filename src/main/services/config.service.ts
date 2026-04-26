@@ -379,11 +379,17 @@ export function onApiConfigChange(handler: ApiConfigChangeHandler): () => void {
 // an in-memory cache instead of reading config.json on every request.
 // ============================================================================
 
-type NetworkConfigChangeHandler = (proxy: string | undefined) => void
+/** Payload delivered to network config change subscribers */
+export interface NetworkConfigPayload {
+  proxy: string | undefined
+  browserUseProxy: boolean
+}
+
+type NetworkConfigChangeHandler = (network: NetworkConfigPayload) => void
 const networkConfigChangeHandlers: NetworkConfigChangeHandler[] = []
 
 /**
- * Register a callback to be notified when network config (proxy) changes.
+ * Register a callback to be notified when network config changes.
  * Called synchronously inside saveConfig so the cache is hot before the
  * next proxyFetch() call.
  *
@@ -540,6 +546,7 @@ interface HaloConfig {
   // Network configuration (proxy, etc.)
   network?: {
     proxy?: string  // Manual proxy URL. Empty string or undefined = use system proxy.
+    browserUseProxy?: boolean  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
   }
 }
 
@@ -1067,9 +1074,12 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
     newConfig.network = { ...currentConfig.network, ...config.network }
     // Notify synchronously — proxy-fetch updates its in-memory cache immediately
     if (networkConfigChangeHandlers.length > 0) {
-      const proxy = newConfig.network?.proxy
+      const payload: NetworkConfigPayload = {
+        proxy: newConfig.network?.proxy,
+        browserUseProxy: newConfig.network?.browserUseProxy === true,
+      }
       networkConfigChangeHandlers.forEach(handler => {
-        try { handler(proxy) } catch (e) {
+        try { handler(payload) } catch (e) {
           console.error('[Config] Error in network config change handler:', e)
         }
       })

@@ -246,6 +246,7 @@ export interface LayoutConfig {
 // Network configuration
 export interface NetworkConfig {
   proxy?: string;  // Manual proxy URL (e.g. http://host:port, socks5://host:port). Empty = use system proxy.
+  browserUseProxy?: boolean;  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
 }
 
 export interface HaloConfig {

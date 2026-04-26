@@ -154,7 +154,7 @@ export type AnthropicToolChoice =
 // ============================================================================
 
 export interface AnthropicThinkingConfig {
-  type: 'enabled' | 'disabled'
+  type: 'enabled' | 'disabled' | 'adaptive'
   budget_tokens?: number
 }
 

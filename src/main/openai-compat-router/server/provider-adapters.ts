@@ -134,10 +134,19 @@ const deepSeekAdapter: ProviderAdapter = {
   },
 
   transformRequest(body: Record<string, unknown>, context?: AdapterContext): void {
-    // Only inject when thinking mode is active (reasoning_effort present).
-    // When inactive, reasoning_content must be absent — the converter already
-    // omits it, so no action needed.
-    if (!body.reasoning_effort) return
+    // Inject reasoning_content when:
+    //   1. reasoning_effort is set (thinking mode explicitly active), OR
+    //   2. Original request contains thinking blocks from previous turns
+    //      (DeepSeek reasoner models return reasoning_content even without
+    //      reasoning_effort; subsequent turns MUST echo it back or the API
+    //      returns HTTP 400)
+    const hasReasoningEffort = !!body.reasoning_effort
+    const hasThinkingBlocks = context?.originalRequest?.messages?.some(
+      (msg) => msg.role === 'assistant' && Array.isArray(msg.content) &&
+        (msg.content as Array<{ type?: string }>).some((b) => b.type === 'thinking')
+    ) ?? false
+
+    if (!hasReasoningEffort && !hasThinkingBlocks) return
 
     injectReasoningContent(body, context)
 

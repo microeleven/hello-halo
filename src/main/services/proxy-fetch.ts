@@ -180,9 +180,14 @@ let _appProxy: string | null | undefined = undefined
 // AI Browser session proxy sync
 //
 // The AI Browser uses a dedicated Electron session ('persist:browser')
-// separate from the default session. session.setProxy() must be called
-// explicitly so that user-configured proxy in Settings also applies to
-// browser page loads, not just Node.js-level proxyFetch() calls.
+// separate from the default session. By default, the browser uses the
+// system proxy (Electron default), NOT the Settings proxy. This avoids
+// breakage when the Settings proxy only supports API traffic (common in
+// China where dedicated Claude API proxies don't handle general web).
+//
+// When `network.browserUseProxy` is true, the Settings proxy is applied
+// to the browser session via session.setProxy(). Otherwise the session
+// is reset to system proxy mode.
 // ============================================================================
 
 const BROWSER_PARTITION = 'persist:browser'
@@ -222,18 +227,24 @@ function applyProxyToBrowserSession(proxy: string | null): void {
   }
 }
 
-onNetworkConfigChange((proxy) => {
+onNetworkConfigChange(({ proxy, browserUseProxy }) => {
   _appProxy = proxy?.trim() || null
-  applyProxyToBrowserSession(_appProxy)
-  console.log(`[ProxyFetch] App proxy updated: ${_appProxy || 'none (auto-detect from system)'}`)
+  // AI Browser only follows Settings proxy when explicitly opted-in;
+  // otherwise it uses the system proxy (Electron default behavior).
+  applyProxyToBrowserSession(browserUseProxy ? _appProxy : null)
+  console.log(`[ProxyFetch] App proxy updated: ${_appProxy || 'none (auto-detect from system)'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}`)
 })
 
 function getAppProxy(): string | null {
   if (_appProxy === undefined) {
     // First call: initialize from disk once, then never again
-    _appProxy = getConfig().network?.proxy?.trim() || null
-    // Sync to the AI Browser session so it is correct from the first page load
-    applyProxyToBrowserSession(_appProxy)
+    const network = getConfig().network
+    _appProxy = network?.proxy?.trim() || null
+    // Sync to the AI Browser session so it is correct from the first page load.
+    // Only apply Settings proxy when browserUseProxy is explicitly true;
+    // otherwise let the browser use the system proxy (Electron default).
+    const browserUseProxy = network?.browserUseProxy === true
+    applyProxyToBrowserSession(browserUseProxy ? _appProxy : null)
   }
   return _appProxy
 }
