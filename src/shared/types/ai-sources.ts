@@ -326,6 +326,13 @@ export interface OAuthStartResult {
   userCode?: string
   /** Verification URL for device code flow */
   verificationUri?: string
+  /**
+   * Redirect URI for redirect-flow OAuth (PKCE).
+   * Returned by providers that need the renderer to know which URL the
+   * BrowserWindow should intercept. Owning this value in the provider keeps
+   * the renderer free of provider-specific endpoint constants.
+   */
+  redirectUri?: string
 }
 
 /**

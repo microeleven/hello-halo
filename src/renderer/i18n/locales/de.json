@@ -666,6 +666,7 @@
   "Logged in": "Angemeldet",
   "Logging in...": "Melde an...",
   "Login failed": "Login fehlgeschlagen",
+  "Login flow misconfigured (missing redirect URI). Please retry.": "",
   "Logout": "Abmelden",
   "Make sure Halo is running on your computer with Remote Access enabled": "Stellen Sie sicher, dass Halo auf Ihrem Computer läuft und Fernzugriff aktiviert ist",
   "Manage AI Provider": "AI-Anbieter verwalten",

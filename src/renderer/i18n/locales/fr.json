@@ -703,6 +703,7 @@
   "Logged in": "Connecté",
   "Logging in...": "Connexion en cours...",
   "Login failed": "Échec de la connexion",
+  "Login flow misconfigured (missing redirect URI). Please retry.": "",
   "Logout": "Déconnexion",
   "Make sure Halo is running on your computer with Remote Access enabled": "Assurez-vous que Halo est en cours d'exécution sur votre ordinateur avec l'Accès à distance activé",
   "Manage AI Provider": "Gérer le fournisseur d'IA",

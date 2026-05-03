@@ -24,6 +24,8 @@ interface DeviceCodeInfo {
 interface ClaudeLoginState {
   loginUrl: string
   state: string
+  /** Redirect URI the BrowserWindow should intercept (provider-owned) */
+  redirectUri: string
   manualCode: string
   autoLoginInProgress: boolean
   error: string | null
@@ -57,11 +59,12 @@ export function SetupPage() {
         throw new Error(result.error || t('Failed to start login'))
       }
 
-      const { loginUrl, state, userCode, verificationUri } = result.data as {
+      const { loginUrl, state, userCode, verificationUri, redirectUri } = result.data as {
         loginUrl: string
         state: string
         userCode?: string
         verificationUri?: string
+        redirectUri?: string
       }
       setOauthState(state)
 
@@ -71,6 +74,7 @@ export function SetupPage() {
         setClaudeLogin({
           loginUrl,
           state,
+          redirectUri: redirectUri ?? '',
           manualCode: '',
           autoLoginInProgress: false,
           error: null,
@@ -112,11 +116,14 @@ export function SetupPage() {
   // ── Claude: "Direct Login" button handler ────────────────────────────
   const handleClaudeDirectLogin = async () => {
     if (!claudeLogin) return
+    if (!claudeLogin.redirectUri) {
+      setClaudeLogin(prev => prev ? { ...prev, error: t('Login flow misconfigured (missing redirect URI). Please retry.') } : null)
+      return
+    }
     setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: true, error: null } : null)
 
     try {
-      const redirectUri = 'https://console.anthropic.com/oauth/code/callback'
-      const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, redirectUri)
+      const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, claudeLogin.redirectUri)
 
       if (!windowResult.success) {
         const errMsg = windowResult.error || t('Login failed')

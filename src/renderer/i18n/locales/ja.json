@@ -666,6 +666,7 @@
   "Logged in": "ログイン済み",
   "Logging in...": "ログイン中...",
   "Login failed": "ログインに失敗しました",
+  "Login flow misconfigured (missing redirect URI). Please retry.": "",
   "Logout": "ログアウト",
   "Make sure Halo is running on your computer with Remote Access enabled": "Haloが起動し、リモートアクセスが有効になっていることを確認してください",
   "Manage AI Provider": "AIプロバイダーを管理",

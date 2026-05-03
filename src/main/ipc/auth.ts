@@ -135,7 +135,7 @@ export function registerAuthHandlers(): void {
         // ── Redirect intercept ─────────────────────────────────────────────
         /**
          * Intercept navigations to the redirectUri to extract the auth code.
-         * Anthropic's redirect: https://console.anthropic.com/oauth/code/callback?code=...
+         * Anthropic's redirect: https://platform.claude.com/oauth/code/callback?code=...
          * The code may contain '#' — split on '#' and use the first part as the actual code.
          */
         const handleRedirect = (url: string): boolean => {

@@ -666,6 +666,7 @@
   "Logged in": "已登入",
   "Logging in...": "登入中...",
   "Login failed": "登入失敗",
+  "Login flow misconfigured (missing redirect URI). Please retry.": "",
   "Logout": "登出",
   "Make sure Halo is running on your computer with Remote Access enabled": "請確保 Halo 已在您的電腦上執行，且已啟用遠端存取功能",
   "Manage AI Provider": "管理 AI 供應商",

@@ -112,6 +112,8 @@ interface ClaudeLoginState {
   loginUrl: string
   /** PKCE state (verifier) */
   state: string
+  /** Redirect URI the BrowserWindow should intercept (provider-owned) */
+  redirectUri: string
   /** User-pasted authorization code */
   manualCode: string
   /** Whether the auto login (BrowserWindow) is in progress */
@@ -251,11 +253,12 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         return
       }
 
-      const { loginUrl, state, userCode, verificationUri } = result.data as {
+      const { loginUrl, state, userCode, verificationUri, redirectUri } = result.data as {
         loginUrl: string
         state: string
         userCode?: string
         verificationUri?: string
+        redirectUri?: string
       }
 
       // ── Claude OAuth: show dual-mode login dialog ──────────────────────
@@ -264,6 +267,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         setClaudeLogin({
           loginUrl,
           state,
+          redirectUri: redirectUri ?? '',
           manualCode: '',
           autoLoginInProgress: false,
           error: null,
@@ -300,11 +304,14 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   // ── Claude: "Direct Login" button handler ────────────────────────────
   const handleClaudeDirectLogin = async () => {
     if (!claudeLogin) return
+    if (!claudeLogin.redirectUri) {
+      setClaudeLogin(prev => prev ? { ...prev, error: t('Login flow misconfigured (missing redirect URI). Please retry.') } : null)
+      return
+    }
     setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: true, error: null } : null)
 
     try {
-      const redirectUri = 'https://console.anthropic.com/oauth/code/callback'
-      const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, redirectUri)
+      const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, claudeLogin.redirectUri)
 
       if (!windowResult.success) {
         const errMsg = windowResult.error || t('Login failed')
