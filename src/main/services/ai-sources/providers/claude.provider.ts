@@ -194,8 +194,17 @@ class ClaudeProvider implements OAuthAISourceProvider {
 
     const rawModel = c.model || 'claude-sonnet-4-6'
     const is1mContext = /\[1m\]$/i.test(rawModel)
-    // Strip [1m] suffix — it's a client-side marker for 1M context, not part of the API model ID
-    const model = rawModel.replace(/\[1m\]$/i, '')
+    // Preserve the [1m] suffix on the propagated model id. The embedded
+    // Claude SDK relies on this suffix for its internal has1mContext() /
+    // getContextWindowForModel() detection — without it, the SDK's local
+    // context window stays at the 200K default and auto-compact triggers
+    // long before the 1M wire window is exhausted.
+    //
+    // [1m] is stripped at the wire boundary inside the anthropic_passthrough
+    // handler (openai-compat-router/server/request-handler.ts) before the
+    // request body is forwarded to the Anthropic API, which only accepts
+    // canonical model ids.
+    const model = rawModel
 
     const betas = buildBetaHeaders(model, is1mContext)
 

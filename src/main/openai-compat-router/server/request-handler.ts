@@ -335,11 +335,20 @@ async function handleAnthropicPassthrough(
     }
   }
 
-  // Override model if specified in config
-  // This mutates the parsed object, so rawBody can't be used
-  const modelOverridden = !!(model && model !== anthropicRequest.model)
-  if (model) {
-    anthropicRequest.model = model
+  // Override model if specified in config.
+  //
+  // [1m] is a Claude-specific client-side marker (used by the embedded SDK
+  // for 1M-context window detection, see has1mContext / getContextWindowForModel)
+  // that must be stripped before reaching /v1/messages — the Anthropic API
+  // only accepts canonical model ids. The strip is a no-op for any backend
+  // whose model ids never carry this suffix.
+  //
+  // This mutates the parsed object, so rawBody can't be used when the
+  // override (or strip) actually changes the body.
+  const wireModel = model ? model.replace(/\[1m\]$/i, '') : undefined
+  const modelOverridden = !!(wireModel && wireModel !== anthropicRequest.model)
+  if (wireModel) {
+    anthropicRequest.model = wireModel
   }
 
   const toolCount = anthropicRequest.tools?.length ?? 0

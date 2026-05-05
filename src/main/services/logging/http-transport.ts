@@ -1,13 +1,13 @@
 /**
- * HTTP Request/Response Logger
+ * HTTP Request/Response Transport
  *
  * Dedicated electron-log instance for raw outbound HTTP traffic logging.
  * Captures every request and response made through proxyFetch(), including
  * full headers (auth tokens), request body, response status, and timing.
  *
- * Lifecycle: Controlled exclusively by developer-mode.ts (central controller).
+ * Lifecycle: Controlled exclusively by the logging controller.
  * This module does NOT subscribe to config changes directly — it exposes
- * setHttpLogging() and is toggled by the Developer Mode orchestrator.
+ * setHttpLogging() and is toggled by the controller.
  *
  * Log file: same directory as main.log, filename = http-raw.log
  *   macOS:   ~/Library/Logs/Halo/http-raw.log
@@ -177,5 +177,3 @@ export function logHttpResponseBody(method: string, url: string, body: string): 
 
   httpLog.info(lines.join('\n'))
 }
-
-// Note: No self-registration. Lifecycle is managed by developer-mode.ts.

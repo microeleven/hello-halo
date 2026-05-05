@@ -16,7 +16,7 @@
 
 import { is } from '@electron-toolkit/utils'
 import { jsonrepair } from 'jsonrepair'
-import { isDeveloperMode } from '../developer-mode'
+import { isDeveloperMode } from '../logging'
 import type {
   Thought,
   ToolCall,

@@ -37,6 +37,7 @@
  */
 
 import { getConfig } from '../config.service'
+import { installSdkLogger } from '../logging'
 
 // ============================================
 // SDK Module Interface
@@ -95,6 +96,11 @@ async function doInitSdk(): Promise<void> {
   if (engine === 'halo') {
     _sdk = await loadHaloSdk()
     _engine = 'halo'
+    // Inject Halo's electron-log-backed logger into the SDK.
+    // SDK exposes setLogger() — if available, wire it up.
+    if (typeof (_sdk as any).setLogger === 'function') {
+      installSdkLogger((_sdk as any).setLogger)
+    }
     const duration = (performance.now() - startTime).toFixed(1)
     console.log(`[SDK] Active engine: Halo SDK (@hello-halo/agent-sdk) [${duration}ms]`)
   } else {

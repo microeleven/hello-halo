@@ -1,19 +1,23 @@
 /**
- * Developer Mode — Central Controller
+ * Logging Controller — Central Orchestrator
  *
  * Single source of truth for Developer Mode state. When toggled, this module
- * orchestrates all debug subsystems:
+ * orchestrates all logging transports:
  *
  *   1. Global log level  — switches electron-log file transport between
  *      'info' and 'debug', so all console.debug() calls across the main
  *      process are either written to main.log or silently dropped.
  *
  *   2. HTTP request/response logging — toggles the dedicated http-raw.log
- *      logger via setHttpLogging().
+ *      transport via setHttpLogging().
  *
- * Adding a new debug subsystem:
- *   1. Expose an enable/disable function in your module (like setHttpLogging).
- *   2. Call it from applyDeveloperMode() below.
+ *   3. SDK logging — bumps halo-sdk.log between 'info' and 'debug'
+ *      via setSdkLogLevel().
+ *
+ * Adding a new logging transport:
+ *   1. Create a new <name>-transport.ts in this directory.
+ *   2. Expose a setLevel/setEnabled function.
+ *   3. Call it from applyDeveloperMode() below.
  *   No additional config subscriptions needed — this module is the only
  *   subscriber for the developerMode config field.
  *
@@ -22,8 +26,9 @@
  */
 
 import log from 'electron-log/main.js'
-import { getConfig, onAgentConfigChange } from './config.service'
-import { setHttpLogging } from './http-logger'
+import { getConfig, onAgentConfigChange } from '../config.service'
+import { setHttpLogging } from './http-transport'
+import { setSdkLogLevel } from './sdk-transport'
 
 let _enabled = false
 
@@ -36,7 +41,7 @@ export function isDeveloperMode(): boolean {
 }
 
 /**
- * Apply Developer Mode state change across all debug subsystems.
+ * Apply Developer Mode state change across all logging transports.
  * Idempotent — no-op if state is unchanged.
  */
 function applyDeveloperMode(enabled: boolean): void {
@@ -44,13 +49,16 @@ function applyDeveloperMode(enabled: boolean): void {
   _enabled = enabled
 
   // Always log the transition at info level (visible regardless of mode)
-  console.log(`[DevMode] Developer Mode ${enabled ? 'ENABLED' : 'DISABLED'} — file log level: ${enabled ? 'debug' : 'info'}`)
+  console.log(`[Logging] Developer Mode ${enabled ? 'ENABLED' : 'DISABLED'} — file log level: ${enabled ? 'debug' : 'info'}`)
 
-  // 1. Global log level
+  // 1. Global log level (main.log)
   log.transports.file.level = enabled ? 'debug' : 'info'
 
   // 2. HTTP request/response logging (dedicated http-raw.log)
   setHttpLogging(enabled)
+
+  // 3. SDK logging level (dedicated halo-sdk.log)
+  setSdkLogLevel(enabled ? 'debug' : 'info')
 }
 
 // ============================================================================
@@ -63,7 +71,7 @@ const initialState = getConfig().agent?.developerMode ?? false
 _enabled = !initialState  // ensure applyDeveloperMode doesn't short-circuit
 applyDeveloperMode(initialState)
 
-// Single config subscription for all debug subsystems
+// Single config subscription for all logging transports
 onAgentConfigChange((agent) => {
   applyDeveloperMode(agent?.developerMode ?? false)
 })

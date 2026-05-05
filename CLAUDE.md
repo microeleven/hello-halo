@@ -5,16 +5,17 @@
 ✗ <Button>Save</Button>
 ```
 No need to write translation files because the translation is automated.
-
+Run `npm run i18n` before commit by user.
 Before making any changes, you must read the halo-dev skill.
 
-Always design with high maintainability and modularity, aligned with long-term architectural planning and the evolution of code quality.
+**Long-term principle**
 
-Run `npm run i18n` before commit by user.
+Always design with high maintainability and modularity, aligned with long-term architectural planning and the evolution of code quality. Where to place code files/modules is a crucial issue — they cannot be placed randomly based on proximity to other files, nor can dependencies be introduced arbitrarily just because they happen to be needed. It is necessary to truly consider the responsibility category and abstract boundary of each file, whether to re-abstract, whether to refactor, whether to adjust the folder and module code relationships, etc. These are the points that should always be considered at the architectural level for any new feature or module.
 
 **rules.**
 - Any code changes（edit/delete/move） require human confirmation and consent.
 - You must read the halo-dev specifications before writing code.
+- Follow Long-term principle
   
 **tips.**
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).

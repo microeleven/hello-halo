@@ -31,7 +31,7 @@ import http from 'node:http'
 import zlib from 'node:zlib'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from './config.service'
-import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from './http-logger'
+import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from './logging'
 
 // ============================================================================
 // Preserve originals before any global patching

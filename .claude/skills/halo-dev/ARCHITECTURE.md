@@ -65,6 +65,10 @@ src/
 │       ├── analytics/                 # Usage analytics
 │       ├── email-mcp/                 # Email-as-MCP tool server
 │       ├── health/                    # Diagnostics & recovery
+│       ├── logging/                   # Logging subsystem: controller (Developer Mode toggle)
+│       │                              #   + transports (http-raw.log, halo-sdk.log) + redact utils.
+│       │                              #   Single subscriber for config.agent.developerMode;
+│       │                              #   transports expose setLevel/setEnabled only.
 │       ├── notify-channels/           # Outbound notification channels (Email/WeCom/DingTalk/Feishu/Webhook)
 │       ├── perf/                      # Performance monitoring
 │       ├── stealth/                   # Anti-detection evasions
@@ -75,7 +79,7 @@ src/
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, git-bash, git-bash-installer,
 │                                      #   mock-bash, browser-view, watcher-host
-│                                      #   (+ utilities: browser-login-pages, http-logger, proxy-fetch)
+│                                      #   (+ utilities: browser-login-pages, proxy-fetch)
 │
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols
