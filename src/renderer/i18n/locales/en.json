@@ -266,6 +266,8 @@
   "Close sidebar": "Close sidebar",
   "Close tab": "Close tab",
   "Code, documents, spreadsheets, and web pages are saved as real files you can open anytime.": "Code, documents, spreadsheets, and web pages are saved as real files you can open anytime.",
+  "Codex SDK": "Codex SDK",
+  "Codex SDK adapter that implements the Claude Code protocol for compatible Halo agent behavior. Experimental.": "Codex SDK adapter that implements the Claude Code protocol for compatible Halo agent behavior. Experimental.",
   "Collapse": "Collapse",
   "Collapse canvas": "Collapse canvas",
   "Column {{index}}": "Column {{index}}",

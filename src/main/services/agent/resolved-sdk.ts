@@ -5,7 +5,8 @@
  * ║  SINGLE ENTRY POINT FOR ALL SDK IMPORTS                          ║
  * ║                                                                   ║
  * ║  Rule: No other file may import directly from                    ║
- * ║    @anthropic-ai/claude-agent-sdk  or  @hello-halo/agent-sdk     ║
+ * ║    @anthropic-ai/claude-agent-sdk, @hello-halo/agent-sdk, or      ║
+ * ║    @openai/codex-sdk                                           ║
  * ║  All SDK access must go through this file.                       ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  *
@@ -18,8 +19,9 @@
  * │  query) are loaded dynamically at runtime via initSdk().        │
  * │  This enables true engine switching:                            │
  * │                                                                  │
- * │  • Delete CC SDK package   → system runs on Halo SDK only       │
- * │  • Delete Halo SDK package → system runs on CC SDK only         │
+ * │  • Delete CC SDK package     → system runs on Halo/Codex only   │
+ * │  • Delete Halo SDK package   → system runs on CC/Codex only     │
+ * │  • Delete Codex SDK package  → system runs on CC/Halo only      │
  * │                                                                  │
  * │  No fallback. Engine is a hard constraint. If the configured    │
  * │  SDK is not available, startup fails immediately with a clear   │
@@ -29,6 +31,7 @@
  * SDK engine values (config.agent.sdkEngine):
  *   'anthropic' (default) → @anthropic-ai/claude-agent-sdk (CC SDK)
  *   'halo'                → @hello-halo/agent-sdk (Halo SDK)
+ *   'codex'               → @openai/codex-sdk through CC protocol adapter
  *
  * Startup requirement:
  *   initSdk() must be called once during app bootstrap, before any
@@ -45,7 +48,7 @@ import { installSdkLogger } from '../logging'
 
 /**
  * Minimal shape of what we need from either SDK.
- * Both SDKs must provide these exports with compatible runtime behavior.
+ * Both SDKs/adapters must provide these exports with compatible runtime behavior.
  */
 interface SdkModule {
   tool: (...args: any[]) => any
@@ -103,12 +106,25 @@ async function doInitSdk(): Promise<void> {
     }
     const duration = (performance.now() - startTime).toFixed(1)
     console.log(`[SDK] Active engine: Halo SDK (@hello-halo/agent-sdk) [${duration}ms]`)
-  } else {
-    _sdk = await loadCcSdk()
-    _engine = 'anthropic'
-    const duration = (performance.now() - startTime).toFixed(1)
-    console.log(`[SDK] Active engine: CC SDK (@anthropic-ai/claude-agent-sdk) [${duration}ms]`)
+    return
   }
+
+  if (engine === 'codex') {
+    _sdk = await loadCodexSdk()
+    _engine = 'codex'
+    const duration = (performance.now() - startTime).toFixed(1)
+    console.log(`[SDK] Active engine: Codex SDK (@openai/codex-sdk adapter) [${duration}ms]`)
+    return
+  }
+
+  if (engine !== 'anthropic') {
+    throw new Error(`[SDK] Unknown SDK engine "${engine}". Expected "anthropic", "halo", or "codex".`)
+  }
+
+  _sdk = await loadCcSdk()
+  _engine = 'anthropic'
+  const duration = (performance.now() - startTime).toFixed(1)
+  console.log(`[SDK] Active engine: CC SDK (@anthropic-ai/claude-agent-sdk) [${duration}ms]`)
 }
 
 // ============================================
@@ -129,8 +145,27 @@ async function loadHaloSdk(): Promise<SdkModule> {
       'The configured engine is "halo" but the package is not available.\n' +
       'Solutions:\n' +
       '  1. Install @hello-halo/agent-sdk, OR\n' +
-      '  2. Change config.agent.sdkEngine to "anthropic" and restart'
+      '  2. Change config.agent.sdkEngine to "anthropic" or "codex" and restart'
     console.error(message)
+    throw new Error(message)
+  }
+}
+
+async function loadCodexSdk(): Promise<SdkModule> {
+  try {
+    const [{ createCodexSdkModule }, runtime] = await Promise.all([
+      import('./codex'),
+      import(/* @vite-ignore */ '@openai/codex-sdk'),
+    ])
+    return createCodexSdkModule(runtime as any) as unknown as SdkModule
+  } catch (error) {
+    const message =
+      '[SDK] Failed to load @openai/codex-sdk.\n' +
+      'The configured engine is "codex" but the package is not available.\n' +
+      'Solutions:\n' +
+      '  1. Install @openai/codex-sdk and @openai/codex, OR\n' +
+      '  2. Change config.agent.sdkEngine to "anthropic" or "halo" and restart'
+    console.error(message, error)
     throw new Error(message)
   }
 }
@@ -148,7 +183,7 @@ async function loadCcSdk(): Promise<SdkModule> {
       'The configured engine is "anthropic" but the package is not available.\n' +
       'Solutions:\n' +
       '  1. Install @anthropic-ai/claude-agent-sdk, OR\n' +
-      '  2. Change config.agent.sdkEngine to "halo" and restart'
+      '  2. Change config.agent.sdkEngine to "halo" or "codex" and restart'
     console.error(message)
     throw new Error(message)
   }

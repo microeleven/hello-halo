@@ -8,6 +8,7 @@ import express, { type Express, type Request, type Response } from 'express'
 import type { AnthropicRequest } from '../types'
 import { decodeBackendConfig } from '../utils'
 import { handleMessagesRequest, handleCountTokensRequest } from './request-handler'
+import { handleResponsesRequest } from './codex-responses-handler'
 
 export interface RouterOptions {
   debug?: boolean
@@ -87,6 +88,30 @@ export function createApp(options: RouterOptions = {}): Express {
     await handleMessagesRequest(anthropicRequest, decodedConfig, res, {
       debug, timeoutMs, sdkHeaders, queryString, rawBody
     })
+  })
+
+  app.post('/v1/responses', async (req: Request, res: Response) => {
+    const rawAuth = req.headers.authorization
+    const auth = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth
+    const token = auth?.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined
+
+    if (!token) {
+      return res.status(401).json({
+        error: { type: 'authentication_error', message: 'Authorization Bearer token is required' }
+      })
+    }
+
+    const decodedConfig = decodeBackendConfig(token)
+    if (!decodedConfig) {
+      return res.status(400).json({
+        error: {
+          type: 'invalid_request_error',
+          message: 'Invalid Authorization token format. Expect Bearer base64(JSON.stringify({ url, key, model?, apiType? }))'
+        }
+      })
+    }
+
+    await handleResponsesRequest(req.body || {}, decodedConfig, res, { debug, timeoutMs })
   })
 
   // Token counting endpoint

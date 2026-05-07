@@ -426,7 +426,6 @@ async function handleAnthropicPassthrough(
     return sendError(res, 'api_error', error?.message || 'Internal error')
   }
 }
-
 // ============================================================================
 // OpenAI Conversion Handler
 // ============================================================================
@@ -480,7 +479,6 @@ async function handleOpenAIConversion(
       const toolCount = (openaiRequest as any).tools?.length ?? 0
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
       console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
-
 
       // Build headers: start with custom headers from config
       const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }

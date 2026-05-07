@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.8-dev.0-rc.1-rc.1-rc.1-rc.1",
+  "version": "2.1.8-dev.0-rc.1-rc.1-rc.1-rc.1-rc.1",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -51,6 +51,8 @@
     "@anthropic-ai/claude-code": "2.1.89",
     "@anthropic-ai/sdk": "latest",
     "@anthropic-ai/tokenizer": "^0.0.4",
+    "@openai/codex": "0.128.0",
+    "@openai/codex-sdk": "0.128.0",
     "@capacitor/android": "^8.2.0",
     "@capacitor/app": "^8.0.1",
     "@capacitor/cli": "^8.2.0",
@@ -186,6 +188,10 @@
       "!node_modules/better-sqlite3/prebuilds"
     ],
     "asarUnpack": [
+      "node_modules/@openai/codex/bin/**/*",
+      "node_modules/@openai/codex/vendor/**/*",
+      "node_modules/@openai/codex-*/vendor/**/*",
+      "node_modules/@openai/codex-sdk/dist/**/*",
       "node_modules/cloudflared/**/*",
       "node_modules/@parcel/watcher-*/**/*",
       "node_modules/better-sqlite3/build/Release/*.node",

@@ -91,11 +91,11 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
 
   const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? 50)
-  const [sdkEngine, setSdkEngineState] = useState<'anthropic' | 'halo'>(
+  const [sdkEngine, setSdkEngineState] = useState<'anthropic' | 'halo' | 'codex'>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
   // Track whether the SDK engine was changed from the initial value (needs restart)
-  const [sdkEngineInitial] = useState<'anthropic' | 'halo'>(
+  const [sdkEngineInitial] = useState<'anthropic' | 'halo' | 'codex'>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
@@ -137,7 +137,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleSdkEngineChange = async (engine: 'anthropic' | 'halo') => {
+  const handleSdkEngineChange = async (engine: 'anthropic' | 'halo' | 'codex') => {
     if (engine === sdkEngine) return
     setSdkEngineState(engine)
     try {
@@ -280,6 +280,22 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               <div>
                 <p className="font-medium text-sm">{t('Halo SDK')}</p>
                 <p className="text-xs text-muted-foreground">{t('Module-level invocation with faster startup. Optimized for open-source models. Mirrors Claude Code SDK behavior. Experimental.')}</p>
+              </div>
+            </label>
+
+            {/* Codex SDK */}
+            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input
+                type="radio"
+                name="sdkEngine"
+                value="codex"
+                checked={sdkEngine === 'codex'}
+                onChange={() => handleSdkEngineChange('codex')}
+                className="mt-0.5 accent-primary"
+              />
+              <div>
+                <p className="font-medium text-sm">{t('Codex SDK')}</p>
+                <p className="text-xs text-muted-foreground">{t('Codex SDK adapter that implements the Claude Code protocol for compatible Halo agent behavior. Experimental.')}</p>
               </div>
             </label>
           </div>
