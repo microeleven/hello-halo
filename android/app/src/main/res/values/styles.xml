@@ -1,12 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
-        <!-- Customize your theme here. -->
+    <!-- Base application theme.
+
+         Parent: Theme.AppCompat.DayNight.NoActionBar
+         - DayNight: app already supports light/dark via WebView CSS, so the
+           native theme should follow system mode (matches AppTheme.NoActionBar
+           below, which the activity actually renders into after splash).
+         - NoActionBar: this is a Capacitor WebView app — the native ActionBar
+           is never shown.
+
+         The transparent status/navigation bar items below enable edge-to-edge:
+         the WebView paints behind both system bars, and `MainActivity` writes
+         the real status bar height into `--safe-area-inset-top` so layouts
+         using `var(--sat)` push content below it. -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
+        <!-- Edge-to-edge: draw behind system bars; safe-area handled in WebView. -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowTranslucentStatus">false</item>
+        <item name="android:windowTranslucentNavigation">false</item>
     </style>
 
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">

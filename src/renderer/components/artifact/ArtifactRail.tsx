@@ -517,7 +517,7 @@ export function ArtifactRail({
 
         {/* Overlay backdrop + panel - z-[70] to stay above Canvas overlay (z-50) */}
         {mobileOverlayOpen && (
-          <div className="fixed inset-0 z-[70] flex justify-end">
+          <div className="fixed z-[70] flex justify-end" style={{ top: 'var(--sat, 0px)', right: 0, bottom: 0, left: 0 }}>
             {/* Backdrop */}
             <div
               className="absolute inset-0 bg-background/70 animate-fade-in"

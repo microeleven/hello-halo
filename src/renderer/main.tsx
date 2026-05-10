@@ -18,6 +18,10 @@ if (typeof window !== 'undefined' && 'halo' in window) {
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { initCapacitorMobileShell } from './api/safe-area'
+
+// Capacitor mobile shell — edge-to-edge + safe-area sync. No-op on Electron/Web.
+void initCapacitorMobileShell()
 
 // i18n configuration - must be imported before App
 import './i18n'

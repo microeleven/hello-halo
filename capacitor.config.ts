@@ -33,6 +33,8 @@ const config: CapacitorConfig = {
     }
   },
   android: {
+    // Enable edge-to-edge display to prevent statusbar overlap
+    edgeToEdge: true,
     // Allow cleartext traffic for LAN connections (http://)
     allowMixedContent: true,
     // Background mode: keep WebSocket alive
