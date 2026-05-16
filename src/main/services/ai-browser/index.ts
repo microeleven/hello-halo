@@ -36,7 +36,7 @@ export const AI_BROWSER_SYSTEM_PROMPT = `
 You can control Halo's embedded real browser. All browser tools are prefixed with mcp__ai-browser__.
 
 ### Core Workflow
-1. \`browser_navigate\` — open a page (current tab or new tab with newTab: true)
+1. \`browser_navigate\` — open a URL with \`{ url: "https://..." }\`; the first page is created automatically
 2. \`browser_snapshot\` — see what's on the page (returns element UIDs)
 3. Use UIDs to interact: \`browser_click\`, \`browser_fill\`, \`browser_hover\`, \`browser_press_key\`
 4. \`browser_snapshot\` again — verify the result, get fresh UIDs
@@ -44,12 +44,13 @@ You can control Halo's embedded real browser. All browser tools are prefixed wit
 
 ### Key Rules
 - Always use the LATEST snapshot's UIDs. After any action that changes the page, re-snapshot before the next interaction.
+- \`browser_navigate\` only opens URLs. Do not pass history actions like back/forward/reload.
+- \`browser_tab\` only manages tabs (list, new, switch, close). Use it only for explicit multi-tab work.
 - If a page is still loading, use Bash \`sleep 1-2\` then snapshot again. Or use \`browser_wait_for\` to wait for specific text.
 - \`browser_fill\` supports both single fields (uid + value) and batch mode (elements array) for efficient form filling.
 - \`browser_click\` supports drag-and-drop via the dragTo parameter.
-- \`browser_tab\` manages multiple open tabs (list, switch, close).
 - \`browser_inspect\` reveals network requests and console messages — powerful for finding API endpoints or diagnosing errors.
-- \`browser_evaluate\` is the escape hatch — use it for anything other tools can't handle (scrolling, viewport resize, direct API calls, DOM manipulation).
+- \`browser_evaluate\` is the escape hatch — use it for anything other tools can't handle (scrolling, viewport resize, history actions, direct API calls, DOM manipulation).
 - For pre-built automation scripts, use \`browser_run\`.
 `
 

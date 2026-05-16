@@ -3,12 +3,12 @@
  *
  * Core navigation and wait.
  *
- * browser_navigate — URL navigation (current tab or new tab) + history actions.
- *   Absorbs the former browser_new_page (via newTab parameter).
+ * browser_navigate — URL navigation only. Opens the first page automatically
+ *   when no active browser page exists.
  * browser_wait_for — Wait for text to appear on the page.
  *
- * Tab management (list/select/close) has moved to tab.ts.
- * Viewport resize has moved to browser_evaluate (escape hatch).
+ * Tab management (list/select/close/new) lives in tab.ts.
+ * Viewport resize and history actions live in browser_evaluate as escape hatches.
  * The original standalone tools remain in their source files for future extension.
  *
  * browser_handle_dialog — Removed from registration. Native JS dialogs (alert/confirm/prompt)
@@ -25,32 +25,23 @@ export function buildNavigationTools(ctx: BrowserContext) {
 
 const browser_navigate = tool(
   'browser_navigate',
-  `Navigate to a URL or control browser history. This is the single entry point for all navigation.
+  `Navigate to a URL. This tool only opens URLs; it does not control browser history.
 
-Open a URL (current tab):       { url: "https://example.com" }
-Open a URL (new tab):           { url: "https://example.com", newTab: true }
-Open mobile site (new tab):     { url: "https://m.example.com", newTab: true, device: "h5" }
-Go back in history:             { action: "back" }
-Go forward in history:          { action: "forward" }
-Reload the page:                { action: "reload" }
+Examples:
+  Open a page:        { url: "https://example.com" }
+  Open mobile page:   { url: "https://m.example.com", device: "h5" }
 
-After any navigation, always take a browser_snapshot to see the loaded page and get element UIDs. If the page is still loading (spinner visible, content incomplete), wait briefly (Bash: sleep 1-2) then snapshot again.
+If no browser page exists, a page is created automatically. If a page is already active, it navigates that page. To keep the current page open and create another tab, use browser_tab with action: "new".
 
-Use newTab: true when you need to keep the current page open (e.g., comparing content across pages, copying data between tabs). Default behavior navigates the current tab.
+After navigation, always take a browser_snapshot to see the loaded page and get element UIDs. If the page is still loading (spinner visible, content incomplete), wait briefly (Bash: sleep 1-2) then snapshot again.
 
-Use device: "h5" only when the target site is mobile-only or the user explicitly requests mobile view. Default is desktop (PC) mode. Only valid with newTab: true.`,
+Use device: "h5" only when the target site is mobile-only or the user explicitly requests mobile view. Mobile mode opens a new page when the active page is not already in mobile mode.`,
   {
-    url: z.string().optional().describe(
-      'URL to navigate to. Use alone to navigate the current tab, or with newTab: true to open in a new tab.'
-    ),
-    action: z.enum(['back', 'forward', 'reload']).optional().describe(
-      'History navigation or reload. Cannot be used together with url.'
-    ),
-    newTab: z.boolean().optional().describe(
-      'Open the URL in a new tab instead of navigating the current tab. Only valid with url. Default: false.'
+    url: z.string().describe(
+      'URL to navigate to. If no browser page exists, a new page is created automatically.'
     ),
     device: z.enum(['pc', 'h5']).optional().describe(
-      'Device mode for new tabs. "h5" emulates mobile (iPhone UA, 390×844 viewport). Only valid with newTab: true. Default: "pc".'
+      'Device mode. "h5" emulates mobile (iPhone UA, 390×844 viewport). Default: "pc".'
     ),
     timeout: z.number().int().optional().describe(
       'Maximum wait time in milliseconds for page load. Default: 30000. Set to 0 to use default.'
@@ -58,110 +49,43 @@ Use device: "h5" only when the target site is mobile-only or the user explicitly
   },
   async (args) => {
     const timeout = (args.timeout && args.timeout > 0) ? args.timeout : NAV_TIMEOUT
+    const requestedDevice: DeviceMode = args.device ?? 'pc'
+    const activeViewId = ctx.getActiveViewId()
+    const activeState = activeViewId ? browserViewManager.getState(activeViewId) : undefined
+    const shouldCreatePage = !activeViewId || (args.device !== undefined && activeState?.deviceMode !== requestedDevice)
 
-    // --- Parameter validation ---
-
-    if (args.url && args.action) {
-      return textResult(
-        'Cannot provide both url and action. Use url to navigate to a page, or action for back/forward/reload.',
-        true
-      )
-    }
-
-    if (!args.url && !args.action) {
-      return textResult(
-        'Provide url to navigate to a page, or action (back/forward/reload).',
-        true
-      )
-    }
-
-    if (args.newTab && !args.url) {
-      return textResult('newTab requires a url.', true)
-    }
-
-    if (args.device && !args.newTab) {
-      return textResult('device requires newTab: true.', true)
-    }
-
-    // --- New tab navigation ---
-
-    if (args.url && args.newTab) {
-      const deviceMode: DeviceMode = args.device ?? 'pc'
-
+    if (shouldCreatePage) {
       try {
         const viewId = `ai-browser-${Date.now()}`
         // Scoped (automation) contexts use the offscreen host window to isolate
         // view lifecycle from the user's mainWindow.
         await browserViewManager.create(viewId, args.url, {
           offscreen: ctx.isScoped,
-          deviceMode,
+          deviceMode: requestedDevice,
         })
         ctx.trackView(viewId)
         ctx.setActiveViewId(viewId)
 
-        // Wait for navigation with timeout protection
         await ctx.waitForNavigation(timeout)
 
         const finalState = browserViewManager.getState(viewId)
-        const modeLabel = deviceMode === 'h5' ? ' [H5 mobile mode]' : ''
+        const modeLabel = requestedDevice === 'h5' ? ' [H5 mobile mode]' : ''
         return textResult(
-          `Created new page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}`
+          `Created page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}`
         )
       } catch (error) {
-        return textResult(`Failed to create new page: ${(error as Error).message}`, true)
+        return textResult(`Failed to create page: ${(error as Error).message}`, true)
       }
-    }
-
-    // --- Current tab URL navigation ---
-
-    if (args.url) {
-      const viewId = ctx.getActiveViewId()
-      if (!viewId) {
-        return textResult(
-          'No active browser page. Use newTab: true to open a URL in a new tab.',
-          true
-        )
-      }
-
-      try {
-        await browserViewManager.navigate(viewId, args.url)
-        await ctx.waitForNavigation(timeout)
-
-        const finalState = browserViewManager.getState(viewId)
-        return textResult(`Navigated to: ${finalState?.url || args.url}`)
-      } catch (error) {
-        return textResult(`Navigation failed: ${(error as Error).message}`, true)
-      }
-    }
-
-    // --- History / reload actions ---
-
-    const viewId = ctx.getActiveViewId()
-    if (!viewId) {
-      return textResult(
-        'No active browser page. Navigate to a URL first with: { url: "...", newTab: true }',
-        true
-      )
     }
 
     try {
-      switch (args.action) {
-        case 'back':
-          browserViewManager.goBack(viewId)
-          break
-        case 'forward':
-          browserViewManager.goForward(viewId)
-          break
-        case 'reload':
-          browserViewManager.reload(viewId)
-          break
-      }
+      await browserViewManager.navigate(activeViewId, args.url)
       await ctx.waitForNavigation(timeout)
 
-      const finalState = browserViewManager.getState(viewId)
-      return textResult(`${args.action} completed: ${finalState?.url || '(unknown)'}`)
+      const finalState = browserViewManager.getState(activeViewId)
+      return textResult(`Navigated to: ${finalState?.url || args.url}`)
     } catch (error) {
-      return textResult(`Navigation ${args.action} failed: ${(error as Error).message}`, true)
+      return textResult(`Navigation failed: ${(error as Error).message}`, true)
     }
   }
 )

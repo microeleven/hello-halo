@@ -122,6 +122,10 @@ function resultEvent(ts = '2026-01-01T00:00:00.000Z'): StoredEvent {
   return { _ts: ts, type: 'result' }
 }
 
+function streamEvent(event: Record<string, unknown>, ts = '2026-01-01T00:00:00.000Z'): StoredEvent {
+  return { _ts: ts, type: 'stream_event', event }
+}
+
 // ============================================
 // Tests
 // ============================================
@@ -410,6 +414,83 @@ describe('convertEventsToMessages', () => {
   })
 
   // ── Tool Result Merging ──
+
+  describe('Codex stream_event persistence', () => {
+    it('rebuilds thinking, tool calls, tool results, and final text from stream events', () => {
+      const events: StoredEvent[] = [
+        userTrigger('Inspect repo', '2026-01-01T00:00:00.000Z'),
+        streamEvent({ type: 'message_start' }, '2026-01-01T00:00:01.000Z'),
+        streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, '2026-01-01T00:00:02.000Z'),
+        streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'I should inspect files.' } }, '2026-01-01T00:00:03.000Z'),
+        streamEvent({ type: 'content_block_stop', index: 0 }, '2026-01-01T00:00:04.000Z'),
+        streamEvent({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'cmd-1', name: 'Bash', input: {} } }, '2026-01-01T00:00:05.000Z'),
+        streamEvent({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"command":"pwd"}' } }, '2026-01-01T00:00:06.000Z'),
+        streamEvent({ type: 'content_block_stop', index: 1 }, '2026-01-01T00:00:07.000Z'),
+        userToolResult('cmd-1', '/tmp/project\n', false, '2026-01-01T00:00:08.000Z'),
+        streamEvent({ type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } }, '2026-01-01T00:00:09.000Z'),
+        streamEvent({ type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'Repo inspected.' } }, '2026-01-01T00:00:10.000Z'),
+        streamEvent({ type: 'content_block_stop', index: 2 }, '2026-01-01T00:00:11.000Z'),
+        streamEvent({ type: 'message_stop' }, '2026-01-01T00:00:12.000Z'),
+        resultEvent('2026-01-01T00:00:13.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(2)
+      expect(messages[1].content).toBe('Repo inspected.')
+
+      const thoughts = messages[1].thoughts!
+      expect(thoughts).toHaveLength(2)
+      expect(thoughts[0]).toMatchObject({ type: 'thinking', content: 'I should inspect files.' })
+      expect(thoughts[1]).toMatchObject({
+        type: 'tool_use',
+        toolName: 'Bash',
+        toolInput: { command: 'pwd' },
+        toolResult: { output: '/tmp/project\n', isError: false, timestamp: '2026-01-01T00:00:08.000Z' },
+      })
+      expect(messages[1].thoughtsSummary).toMatchObject({
+        count: 2,
+        types: { thinking: 1, tool_use: 1 },
+      })
+    })
+
+    it('uses repaired or raw tool input for malformed streamed JSON without dropping the panel', () => {
+      const events: StoredEvent[] = [
+        streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-1', name: 'Bash', input: {} } }),
+        streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"npm test"' } }),
+        streamEvent({ type: 'content_block_stop', index: 0 }),
+        assistantText('Done'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(1)
+      expect(messages[0].content).toBe('Done')
+      expect(messages[0].thoughts![0]).toMatchObject({
+        type: 'tool_use',
+        toolName: 'Bash',
+        toolInput: { command: 'npm test' },
+      })
+    })
+
+    it('does not duplicate Claude assistant-message thoughts when no stream events are persisted', () => {
+      const events: StoredEvent[] = [
+        assistantThinkingAndToolUse('Need to read', 'Read', 'tool-1', { file_path: '/a.ts' }),
+        userToolResult('tool-1', 'content'),
+        assistantText('Read complete.'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(1)
+      expect(messages[0].content).toBe('Read complete.')
+      expect(messages[0].thoughts).toHaveLength(2)
+      expect(messages[0].thoughtsSummary).toMatchObject({
+        count: 2,
+        types: { thinking: 1, tool_use: 1 },
+      })
+    })
+  })
 
   describe('tool result merging', () => {
     it('merges tool_result into corresponding tool_use thought', () => {

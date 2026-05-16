@@ -10,11 +10,12 @@
  * the Activity Thread without losing left-sidebar selection.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../stores/app.store'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppsStore } from '../stores/apps.store'
-import { useAppsPageStore } from '../stores/apps-page.store'
+import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
+import type { AppType } from '../../shared/apps/spec-types'
 import { Header } from '../components/layout/Header'
 import { AppList } from '../components/apps/AppList'
 import { AutomationHeader } from '../components/apps/AutomationHeader'
@@ -57,23 +58,36 @@ export function AppsPage() {
     openActivityThread,
     setInitialAppId,
     setShowInstallDialog,
+    openMarketplaceFilteredBy,
   } = useAppsPageStore()
 
   const isMobile = useIsMobile()
 
-  const [showManualAddDialog, setShowManualAddDialog] = useState(false)
+  /** When set, ManualAddDialog opens pre-targeted to that type (skips chooser) */
+  const [manualAddType, setManualAddType] = useState<'mcp' | 'skill' | null>(null)
   const [showSkillInstallDialog, setShowSkillInstallDialog] = useState(false)
 
-  /** Types that belong to the "My Apps" tab */
-  const NON_AUTOMATION_TYPES = useMemo(() => new Set(['mcp', 'skill', 'extension']), [])
+  /** Maps the current tab to the AppType filter used for visibility */
+  const appTypeForCurrentTab = useMemo<AppType | null>(() => {
+    if (currentTab === 'my-skills') return 'skill'
+    if (currentTab === 'my-mcp') return 'mcp'
+    if (currentTab === 'my-digital-humans') return 'automation'
+    return null
+  }, [currentTab])
 
   /** Filter apps visible in the current tab (excludes store tab) */
   const appsForCurrentTab = useMemo(() => {
-    return apps.filter(a => {
-      const isNonAutomation = NON_AUTOMATION_TYPES.has(a.spec.type)
-      return currentTab === 'my-apps' ? isNonAutomation : !isNonAutomation
-    })
-  }, [apps, currentTab, NON_AUTOMATION_TYPES])
+    if (!appTypeForCurrentTab) return []
+    return apps.filter(a => a.spec.type === appTypeForCurrentTab)
+  }, [apps, appTypeForCurrentTab])
+
+  /**
+   * Open the marketplace pre-filtered by the target type. Delegates to the
+   * store action so the listing is always refetched — never silently stale.
+   */
+  const handleBrowseMarketplace = useCallback((type: AppType) => {
+    void openMarketplaceFilteredBy(type)
+  }, [openMarketplaceFilteredBy])
 
   // Load all apps globally (across all spaces) on mount
   useEffect(() => {
@@ -96,15 +110,14 @@ export function AppsPage() {
     if (initialAppId && apps.length > 0) {
       const app = apps.find(a => a.id === initialAppId)
       if (app) {
-        // Switch to the correct tab for this app type
-        const isNonAutomation = NON_AUTOMATION_TYPES.has(app.spec.type)
-        const targetTab = isNonAutomation ? 'my-apps' : 'my-digital-humans'
+        // Switch to the correct tab for this app type (digital-humans / skills / mcp)
+        const targetTab = tabForAppType(app.spec.type)
         if (currentTab !== targetTab) setCurrentTab(targetTab)
         selectApp(app.id, app.status === 'uninstalled' ? 'uninstalled' : app.spec.type, app.spaceId ?? undefined)
         setInitialAppId(null)
       }
     }
-  }, [apps, initialAppId, selectApp, setInitialAppId, currentTab, setCurrentTab, NON_AUTOMATION_TYPES])
+  }, [apps, initialAppId, selectApp, setInitialAppId, currentTab, setCurrentTab])
 
   // Clear selection when switching between split-layout tabs
   const prevTabRef = useRef(currentTab)
@@ -156,18 +169,19 @@ export function AppsPage() {
   const isAppConfig = detailView?.type === 'app-config'
   const isUninstalledDetail = detailView?.type === 'uninstalled-detail'
 
-  // Render the right-side detail panel
-  const emptyStateVariant = currentTab === 'my-apps' ? 'apps' as const : 'automation' as const
-  const emptyStateAction = currentTab === 'my-apps'
-    ? () => setCurrentTab('store')
-    : () => setShowInstallDialog(true)
+  // Right-pane EmptyState is informational only; install/browse CTAs live
+  // exclusively in the AppList sidebar to avoid double action surfaces.
+  const emptyStateVariant = currentTab === 'my-skills'
+    ? 'skill' as const
+    : currentTab === 'my-mcp'
+      ? 'mcp' as const
+      : 'automation' as const
 
   const renderDetail = () => {
     if (!detailView) {
       return (
         <EmptyState
           hasApps={appsForCurrentTab.length > 0}
-          onInstall={emptyStateAction}
           variant={emptyStateVariant}
         />
       )
@@ -202,7 +216,6 @@ export function AppsPage() {
         return (
           <EmptyState
             hasApps={appsForCurrentTab.length > 0}
-            onInstall={emptyStateAction}
             variant={emptyStateVariant}
           />
         )
@@ -233,38 +246,28 @@ export function AppsPage() {
         }
       />
 
-      {/* Tab bar */}
+      {/* Tab bar — kept provider-agnostic via TabButton sub-component */}
       <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
-        <button
+        <TabButton
+          active={currentTab === 'my-digital-humans'}
+          label={t('My Digital Humans')}
           onClick={() => setCurrentTab('my-digital-humans')}
-          className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-            currentTab === 'my-digital-humans'
-              ? 'bg-secondary text-foreground font-medium'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-          }`}
-        >
-          {t('My Digital Humans')}
-        </button>
-        <button
-          onClick={() => setCurrentTab('my-apps')}
-          className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-            currentTab === 'my-apps'
-              ? 'bg-secondary text-foreground font-medium'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-          }`}
-        >
-          {t('My Apps')}
-        </button>
-        <button
+        />
+        <TabButton
+          active={currentTab === 'my-skills'}
+          label={t('My Skills')}
+          onClick={() => setCurrentTab('my-skills')}
+        />
+        <TabButton
+          active={currentTab === 'my-mcp'}
+          label={t('My MCP')}
+          onClick={() => setCurrentTab('my-mcp')}
+        />
+        <TabButton
+          active={currentTab === 'store'}
+          label={t('Marketplace')}
           onClick={() => setCurrentTab('store')}
-          className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-            currentTab === 'store'
-              ? 'bg-secondary text-foreground font-medium'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-          }`}
-        >
-          {t('App Store')}
-        </button>
+        />
       </div>
 
       {/* Content area */}
@@ -275,11 +278,18 @@ export function AppsPage() {
         <div className="flex-1 flex overflow-hidden">
           {/* Left: App list (fixed 240px width) */}
           <div className="w-60 flex-shrink-0 border-r border-border flex flex-col overflow-hidden">
-            {currentTab === 'my-apps' ? (
+            {currentTab === 'my-skills' ? (
               <AppList
-                mode="apps"
-                onInstall={() => setCurrentTab('store')}
-                onManualAdd={() => setShowManualAddDialog(true)}
+                mode="skill"
+                onInstall={() => handleBrowseMarketplace('skill')}
+                onManualAdd={() => setShowSkillInstallDialog(true)}
+                spaceMap={spaceMap}
+              />
+            ) : currentTab === 'my-mcp' ? (
+              <AppList
+                mode="mcp"
+                onInstall={() => handleBrowseMarketplace('mcp')}
+                onManualAdd={() => setManualAddType('mcp')}
                 spaceMap={spaceMap}
               />
             ) : (
@@ -380,11 +390,18 @@ export function AppsPage() {
             </>
           ) : (
             /* No selection: full-width list */
-            currentTab === 'my-apps' ? (
+            currentTab === 'my-skills' ? (
               <AppList
-                mode="apps"
-                onInstall={() => setCurrentTab('store')}
-                onManualAdd={() => setShowManualAddDialog(true)}
+                mode="skill"
+                onInstall={() => handleBrowseMarketplace('skill')}
+                onManualAdd={() => setShowSkillInstallDialog(true)}
+                spaceMap={spaceMap}
+              />
+            ) : currentTab === 'my-mcp' ? (
+              <AppList
+                mode="mcp"
+                onInstall={() => handleBrowseMarketplace('mcp')}
+                onManualAdd={() => setManualAddType('mcp')}
                 spaceMap={spaceMap}
               />
             ) : (
@@ -405,10 +422,11 @@ export function AppsPage() {
         />
       )}
 
-      {/* Manual add dialog (MCP only — Skill delegates to SkillInstallDialog) */}
-      {showManualAddDialog && (
+      {/* Manual add dialog (MCP only — pre-typed by tab, no chooser step) */}
+      {manualAddType && (
         <ManualAddDialog
-          onClose={() => setShowManualAddDialog(false)}
+          initialType={manualAddType}
+          onClose={() => setManualAddType(null)}
           onSkillAdd={() => setShowSkillInstallDialog(true)}
         />
       )}
@@ -421,6 +439,31 @@ export function AppsPage() {
       )}
 
     </div>
+  )
+}
+
+// ──────────────────────────────────────────────
+// Tab button sub-component
+// ──────────────────────────────────────────────
+
+interface TabButtonProps {
+  active: boolean
+  label: string
+  onClick: () => void
+}
+
+function TabButton({ active, label, onClick }: TabButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap ${
+        active
+          ? 'bg-secondary text-foreground font-medium'
+          : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+      }`}
+    >
+      {label}
+    </button>
   )
 }
 

@@ -38,7 +38,31 @@ export type AppsDetailView =
   | { type: 'uninstalled-detail'; appId: string }
   | null
 
-export type AppsPageTab = 'my-digital-humans' | 'my-apps' | 'store'
+export type AppsPageTab = 'my-digital-humans' | 'my-skills' | 'my-mcp' | 'store'
+
+/**
+ * Map an app type to its owning AppsPage tab.
+ *
+ * Implemented as an exhaustive switch so that adding a new `AppType` member
+ * forces this function to be updated at compile time — preventing the
+ * pre-fix scenario where a new type would silently fall through to the
+ * digital-humans tab.
+ */
+export function tabForAppType(type: AppType): AppsPageTab {
+  switch (type) {
+    case 'skill':
+      return 'my-skills'
+    case 'mcp':
+      return 'my-mcp'
+    case 'automation':
+      return 'my-digital-humans'
+    case 'extension':
+      // Extensions are a future/hidden category — surface them under digital
+      // humans for now so existing install paths remain navigable, even
+      // though no UI currently lists them as their own tab.
+      return 'my-digital-humans'
+  }
+}
 
 /** Which detail tab was last selected for automation apps (persisted to localStorage) */
 export type AutomationDetailTab = 'activity' | 'chat' | 'config'
@@ -103,6 +127,15 @@ interface AppsPageState {
   setStoreSearch: (query: string) => void
   setStoreCategory: (category: string | null) => void
   setStoreTypeFilter: (type: AppType | null) => void
+  /**
+   * Switch to the Marketplace tab pre-filtered by the given app type and
+   * force a fresh fetch so the listing matches the new filter. Use this
+   * for programmatic navigation from outside the marketplace (e.g. empty
+   * state CTAs, home Studio card). Mirrors the inline pattern in
+   * StoreHeader.handleTypeFilterClick — kept as one action so callers can
+   * never forget the reload step.
+   */
+  openMarketplaceFilteredBy: (type: AppType | null) => Promise<void>
   selectStoreApp: (slug: string) => Promise<void>
   clearStoreSelection: () => void
   installFromStore: (slug: string, spaceId: string | null, userConfig?: Record<string, unknown>, onProgress?: (progress: StoreInstallProgress) => void) => Promise<string | null>
@@ -353,6 +386,14 @@ export const useAppsPageStore = create<AppsPageState>()(
   setStoreCategory: (category) => set({ storeCategory: category }),
 
   setStoreTypeFilter: (type) => set({ storeTypeFilter: type }),
+
+  openMarketplaceFilteredBy: async (type) => {
+    // Set filter + tab atomically before kicking off the fetch so the
+    // marketplace UI renders with the new filter already applied while
+    // the new list is loading.
+    set({ storeTypeFilter: type, currentTab: 'store' })
+    await get().loadStoreApps()
+  },
 
   selectStoreApp: async (slug) => {
     const requestId = ++storeDetailRequestSeq

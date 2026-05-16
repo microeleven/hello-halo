@@ -37,16 +37,16 @@ Tools are exposed with prefix `mcp__ai-browser__` (e.g. `mcp__ai-browser__browse
 | Inspect (1) | `browser_inspect` | `tools/inspect.ts` |
 | Download (1) | `browser_download` | `tools/download.ts` |
 
-### Merged Tools (28 → 15)
+### Merged Tools (28 → 14)
 
 Several tools were consolidated by intent:
 
 | New Tool | Absorbed | Mechanism |
 |----------|----------|-----------|
-| `browser_navigate` | + `browser_new_page` | `newTab` / `device` params |
+| `browser_navigate` | URL navigation | URL-only; creates the first page automatically |
 | `browser_click` | + `browser_drag` | `dragTo` param |
 | `browser_fill` | + `browser_fill_form` | `elements` array param |
-| `browser_tab` | `list_pages` + `select_page` + `close_page` | `action` param dispatch |
+| `browser_tab` | `browser_new_page` + `list_pages` + `select_page` + `close_page` | `action` param dispatch |
 | `browser_inspect` | `console` + `console_message` + `network_requests` + `network_request` | `target` param dispatch |
 
 ### Retired Tools (code preserved)
@@ -115,7 +115,7 @@ download tracking, and monitoring state per agent session.
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |
 | `download-utils.ts` | Shared filename sanitization / unique path resolution |
 | `types.ts` | Type definitions |
-| `tools/` | Tool implementations by category (15 active tools) |
+| `tools/` | Tool implementations by category (14 active tools) |
 | `tools/index.ts` | Tool aggregation (`buildAllTools`) |
 | `tools/helpers.ts` | Shared tool utilities |
 
@@ -133,7 +133,7 @@ wc.downloadURL(url)
 ```
 
 The routing uses `contextsByWebContentsId` Map (webContents ID → BrowserContext),
-populated by `ctx.trackView()` when `browser_navigate` creates a view with newTab.
+populated by `ctx.trackView()` when `browser_navigate` or `browser_tab` creates a view.
 
 ## Design Principles
 

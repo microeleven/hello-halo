@@ -9,10 +9,21 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 
+const MOCK_BASH_MARKER = 'mock-bash'
+
 export interface GitBashDetectionResult {
   found: boolean
   path: string | null
   source: 'system' | 'app-local' | 'env-var' | null
+}
+
+export interface GitBashAvailability {
+  available: boolean
+  needsSetup: boolean
+  mockMode: boolean
+  path: string | null
+  source: GitBashDetectionResult['source'] | 'mock'
+  configUpdated?: boolean
 }
 
 /**
@@ -30,9 +41,10 @@ export function detectGitBash(): GitBashDetectionResult {
     return { found: true, path: '/bin/bash', source: 'system' }
   }
 
-  // 1. Check environment variable
+  // 1. Check environment variable. Ignore Halo's mock bash fallback so it
+  // cannot mask a real Git Bash installation added after the user skipped setup.
   const envPath = process.env.CLAUDE_CODE_GIT_BASH_PATH
-  if (envPath && existsSync(envPath)) {
+  if (envPath && !envPath.includes(MOCK_BASH_MARKER) && existsSync(envPath)) {
     console.log('[GitBash] Found via environment variable:', envPath)
     return { found: true, path: envPath, source: 'env-var' }
   }
@@ -93,15 +105,62 @@ function findGitInPath(): string | null {
 }
 
 /**
+ * Resolve Git Bash availability from config plus current system state.
+ *
+ * A previous skip only means the user skipped setup at that time. It must not
+ * block Halo from adopting a real Git Bash installation that appears later.
+ */
+export function resolveGitBashAvailability(config: {
+  gitBash?: {
+    installed?: boolean
+    path?: string | null
+    skipped?: boolean
+  }
+}, persistConfig?: (gitBash: { installed: boolean; path: string | null; skipped: boolean }) => void): GitBashAvailability {
+  if (process.platform !== 'win32') {
+    return { available: true, needsSetup: false, mockMode: false, path: '/bin/bash', source: 'system' }
+  }
+
+  const savedPath = config.gitBash?.installed && config.gitBash?.path ? config.gitBash.path : null
+  if (savedPath) {
+    if (existsSync(savedPath)) {
+      return { available: true, needsSetup: false, mockMode: false, path: savedPath, source: 'app-local' }
+    }
+
+    persistConfig?.({ installed: false, path: null, skipped: false })
+  }
+
+  const detection = detectGitBash()
+  if (detection.found && detection.path) {
+    const configUpdated = !config.gitBash?.installed || config.gitBash.path !== detection.path || !!config.gitBash.skipped
+    if (configUpdated) {
+      persistConfig?.({ installed: true, path: detection.path, skipped: false })
+    }
+
+    return {
+      available: true,
+      needsSetup: false,
+      mockMode: false,
+      path: detection.path,
+      source: detection.source,
+      configUpdated
+    }
+  }
+
+  if (config.gitBash?.skipped) {
+    return { available: true, needsSetup: false, mockMode: true, path: null, source: 'mock' }
+  }
+
+  return { available: false, needsSetup: true, mockMode: false, path: null, source: null }
+}
+
+/**
  * Get the path to the app-local Git Bash installation directory
  */
 export function getAppLocalGitBashDir(): string {
   return join(app.getPath('userData'), 'git-bash')
 }
 
-/**
- * Check if Git Bash is installed by Halo (app-local)
- */
 export function isAppLocalInstallation(): boolean {
   const result = detectGitBash()
   return result.found && result.source === 'app-local'

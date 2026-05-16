@@ -132,6 +132,20 @@ export default defineConfig({
         // SkillHub tests make real network requests to api.skillhub.cn
         actionTimeout: 20000
       }
+    },
+    {
+      name: 'codex-mcp',
+      testMatch: '**/codex-mcp.spec.ts',
+      // Upstream LLM providers occasionally return 429 / transient stream
+      // failures that fire codex's reconnect loop ("Reconnecting... 1/5"),
+      // and the test must not regress on those. Two local retries gives the
+      // upstream a chance to recover without hiding genuine MCP regressions —
+      // a real bridge bug fails all attempts.
+      retries: 2,
+      use: {
+        // Codex turn + MCP tool call needs a generous action timeout.
+        actionTimeout: 60000
+      }
     }
   ],
 

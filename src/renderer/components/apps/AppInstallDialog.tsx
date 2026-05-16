@@ -139,7 +139,9 @@ memory_schema:
 
 # -- Output --
 output:
-  notify: true
+  notify:
+    system: true
+    # channels: [email, wecom]   # Optional external channels
   format: "HN Digest: {story_count} stories"
 
 # -- Escalation --

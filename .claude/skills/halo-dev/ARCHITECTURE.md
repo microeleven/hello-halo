@@ -357,10 +357,10 @@ AI-controlled embedded browser for web automation. Uses Electron BrowserView + C
 
 | Category | Tools |
 |----------|-------|
-| Navigation (2) | `browser_navigate` (includes new tab via `newTab` param), `browser_wait_for` |
+| Navigation (2) | `browser_navigate` (URL-only; creates the first page automatically), `browser_wait_for` |
 | Input (5) | `browser_click` (includes drag via `dragTo` param), `browser_fill` (includes batch via `elements` param), `browser_hover`, `browser_press_key`, `browser_upload_file` |
 | Snapshot (3) | `browser_snapshot` (core!), `browser_screenshot`, `browser_evaluate` |
-| Tab (1) | `browser_tab` (list/select/close actions) |
+| Tab (1) | `browser_tab` (list/new/select/close actions) |
 | Inspect (1) | `browser_inspect` (network + console, target param dispatch) |
 | Script (1) | `browser_run` |
 | Download (1) | `browser_download` |

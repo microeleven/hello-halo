@@ -1018,9 +1018,12 @@ class WecomBotInstance implements ImChannelInstance {
   }
 
   private handleMessage(data: WebSocket.Data): void {
+    const raw = typeof data === 'string' ? data : data.toString()
+    console.log(`[WecomBot:${this.instanceId}] Raw WebSocket message: ${raw}`)
+
     let msg: any
     try {
-      msg = JSON.parse(typeof data === 'string' ? data : data.toString())
+      msg = JSON.parse(raw)
     } catch {
       console.warn(`[WecomBot:${this.instanceId}] Invalid JSON received`)
       return
@@ -1128,43 +1131,26 @@ class WecomBotInstance implements ImChannelInstance {
     const attachments: InboundAttachment[] = []
     const images: ImageAttachment[] = []
 
-    if (msgType === 'image' && body.image?.url && body.image?.aeskey) {
-      const result = await downloadAndPrepareImage(body.image.url, body.image.aeskey, this.instanceId)
-      if (result) {
-        attachments.push(result.attachment)
-        images.push(result.image)
-      }
-    } else if (msgType === 'file' && body.file?.url && body.file?.aeskey) {
-      try {
-        const filename = body.file.filename || `file_${Date.now()}`
-        const localPath = await downloadAndDecrypt(
-          body.file.url, body.file.aeskey, filename, this.instanceId
+    // Process top-level media from the message body
+    await this.collectMedia(body, msgType, attachments, images)
+
+    // ── Process quoted message media (undocumented WeCom feature) ─────────────
+    // When a user replies/quotes a message containing media (file/image/video)
+    // and @-mentions the bot, WeCom includes the quoted message in `body.quote`
+    // with the same structure as a top-level message (msgtype + media payload
+    // with url + aeskey). This enables group-chat file processing: users quote
+    // a file message and @ the bot, bypassing the "file only in direct chat"
+    // limitation for top-level messages.
+    if (body.quote) {
+      const quoteMsgType: string = body.quote.msgtype
+      const quoteMediaCountBefore = attachments.length + images.length
+      await this.collectMedia(body.quote, quoteMsgType, attachments, images)
+      const quoteMediaAdded = (attachments.length + images.length) - quoteMediaCountBefore
+      if (quoteMediaAdded > 0) {
+        console.log(
+          `[WecomBot:${this.instanceId}] Quoted media collected: ${quoteMediaAdded} item(s) ` +
+          `(quoteMsgType=${quoteMsgType})`
         )
-        attachments.push({ type: 'file', filename, localPath })
-      } catch (err) {
-        console.error(`[WecomBot:${this.instanceId}] File download failed:`, err)
-      }
-    } else if (msgType === 'video' && body.video?.url && body.video?.aeskey) {
-      try {
-        const filename = `video_${Date.now()}.mp4`
-        const localPath = await downloadAndDecrypt(
-          body.video.url, body.video.aeskey, filename, this.instanceId
-        )
-        attachments.push({ type: 'video', filename, localPath })
-      } catch (err) {
-        console.error(`[WecomBot:${this.instanceId}] Video download failed:`, err)
-      }
-    } else if (msgType === 'mixed' && body.mixed?.msg_item) {
-      // mixed = mixed media (image+text): array of { msgtype, image?: { url, aeskey }, text?: { content } }
-      const items: any[] = body.mixed.msg_item
-      for (const item of items) {
-        if (item.msgtype === 'image' && item.image?.url && item.image?.aeskey) {
-          const result = await downloadAndPrepareImage(item.image.url, item.image.aeskey, this.instanceId)
-          if (result) {
-            attachments.push(result.attachment)
-            images.push(result.image)
-          }
-        }
       }
     }
 
@@ -1198,24 +1184,97 @@ class WecomBotInstance implements ImChannelInstance {
     return session
   }
 
+  /**
+   * Collect downloadable media from a message fragment into the shared
+   * attachments/images arrays.
+   *
+   * Works for both top-level `body` and nested `body.quote` — both share
+   * the same structure: `{ msgtype, image?, file?, video?, mixed? }`.
+   *
+   * Each item is processed independently — a failed download does not
+   * discard already-downloaded attachments (per-item error isolation).
+   */
+  private async collectMedia(
+    fragment: any,
+    fragmentMsgType: string,
+    attachments: InboundAttachment[],
+    images: ImageAttachment[]
+  ): Promise<void> {
+    if (fragmentMsgType === 'image' && fragment.image?.url && fragment.image?.aeskey) {
+      const result = await downloadAndPrepareImage(fragment.image.url, fragment.image.aeskey, this.instanceId)
+      if (result) {
+        attachments.push(result.attachment)
+        images.push(result.image)
+      }
+    } else if (fragmentMsgType === 'file' && fragment.file?.url && fragment.file?.aeskey) {
+      try {
+        const filename = fragment.file.filename || `file_${Date.now()}`
+        const localPath = await downloadAndDecrypt(
+          fragment.file.url, fragment.file.aeskey, filename, this.instanceId
+        )
+        attachments.push({ type: 'file', filename, localPath })
+      } catch (err) {
+        console.error(`[WecomBot:${this.instanceId}] File download failed:`, err)
+      }
+    } else if (fragmentMsgType === 'video' && fragment.video?.url && fragment.video?.aeskey) {
+      try {
+        const filename = `video_${Date.now()}.mp4`
+        const localPath = await downloadAndDecrypt(
+          fragment.video.url, fragment.video.aeskey, filename, this.instanceId
+        )
+        attachments.push({ type: 'video', filename, localPath })
+      } catch (err) {
+        console.error(`[WecomBot:${this.instanceId}] Video download failed:`, err)
+      }
+    } else if (fragmentMsgType === 'mixed' && fragment.mixed?.msg_item) {
+      const items: any[] = fragment.mixed.msg_item
+      for (const item of items) {
+        if (item.msgtype === 'image' && item.image?.url && item.image?.aeskey) {
+          const result = await downloadAndPrepareImage(item.image.url, item.image.aeskey, this.instanceId)
+          if (result) {
+            attachments.push(result.attachment)
+            images.push(result.image)
+          }
+        }
+      }
+    }
+  }
+
   private extractText(body: any): string {
-    switch (body.msgtype) {
-      case 'text': return body.text?.content ?? ''
+    const mainText = this.extractTextFromFragment(body)
+
+    // Append quoted message context so the AI knows what was referenced
+    if (body.quote) {
+      const quoteText = this.extractTextFromFragment(body.quote)
+      if (quoteText) {
+        return mainText
+          ? `${mainText}\n\n[Quoted message: ${quoteText}]`
+          : `[Quoted message: ${quoteText}]`
+      }
+    }
+
+    return mainText
+  }
+
+  /** Extract human-readable text from a single message fragment (body or quote). */
+  private extractTextFromFragment(fragment: any): string {
+    switch (fragment.msgtype) {
+      case 'text': return fragment.text?.content ?? ''
       case 'image': return '(image)'
       case 'voice': return '(voice message)'
-      case 'file': return `(file: ${body.file?.filename ?? 'unknown'})`
+      case 'file': return `(file: ${fragment.file?.filename ?? 'unknown'})`
       case 'video': return '(video)'
-      case 'link': return `(link: ${body.link?.title ?? body.link?.url ?? ''})`
+      case 'link': return `(link: ${fragment.link?.title ?? fragment.link?.url ?? ''})`
       case 'mixed': {
         // Extract and join all text items from the mixed message
-        const items: any[] = body.mixed?.msg_item ?? []
+        const items: any[] = fragment.mixed?.msg_item ?? []
         const textParts = items
           .filter((item: any) => item.msgtype === 'text')
           .map((item: any) => (item.text?.content ?? '').trim())
           .filter(Boolean)
         return textParts.length > 0 ? textParts.join(' ') : '(mixed media)'
       }
-      default: return `(${body.msgtype ?? 'unknown message type'})`
+      default: return `(${fragment.msgtype ?? 'unknown message type'})`
     }
   }
 

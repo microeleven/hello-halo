@@ -435,6 +435,21 @@ export function registerApiRoutes(app: Express): void {
     res.json(result)
   })
 
+  // Engine capabilities — used by remote / Capacitor clients to mirror
+  // the IPC surface added in `ipc/agent.ts`. The controller is left for
+  // a future commit; we read the SDK directly to avoid drag-along
+  // refactors here.
+  app.get('/api/agent/engine-capabilities', async (_req: Request, res: Response) => {
+    try {
+      const { getEngineCapabilities, getActiveEngine } = await import('../../services/agent/resolved-sdk')
+      const { defaultCapabilitiesFor } = await import('../../services/agent/capabilities')
+      const caps = getEngineCapabilities() ?? defaultCapabilitiesFor(getActiveEngine() ?? 'anthropic')
+      res.json({ success: true, data: caps })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // ===== Artifact Routes =====
   app.get('/api/spaces/:spaceId/artifacts', async (req: Request, res: Response) => {
     try {

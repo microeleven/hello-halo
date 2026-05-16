@@ -4,7 +4,7 @@
 
 import { ipcMain } from 'electron'
 import open from 'open'
-import { detectGitBash, setGitBashPathEnv } from '../services/git-bash.service'
+import { resolveGitBashAvailability, setGitBashPathEnv } from '../services/git-bash.service'
 import { downloadAndInstallGitBash } from '../services/git-bash-installer.service'
 import { createMockBash, cleanupMockBash } from '../services/mock-bash.service'
 import { getConfig, saveConfig } from '../services/config.service'
@@ -26,21 +26,24 @@ export function registerGitBashHandlers(): void {
         return { success: true, data: { found: true, path: '/bin/bash', source: 'system', mockMode: false } }
       }
 
-      // Check config first - if user previously skipped, return mock mode
-      const config = getConfig() as any
-      if (config.gitBash?.skipped) {
-        // User previously skipped - indicate found but in mock mode
-        return { success: true, data: { found: true, path: null, source: 'mock', mockMode: true } }
+      const status = resolveGitBashAvailability(getConfig() as any, (gitBash) => {
+        saveConfig({ gitBash } as any)
+      })
+
+      if (status.path && !status.mockMode) {
+        setGitBashPathEnv(status.path)
+        cleanupMockBash()
       }
 
-      // Check if already configured with valid path
-      if (config.gitBash?.installed && config.gitBash?.path) {
-        return { success: true, data: { found: true, path: config.gitBash.path, source: 'app-local', mockMode: false } }
+      return {
+        success: true,
+        data: {
+          found: status.available,
+          path: status.path,
+          source: status.source,
+          mockMode: status.mockMode
+        }
       }
-
-      // Run fresh detection
-      const result = detectGitBash()
-      return { success: true, data: { ...result, mockMode: false } }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       return { success: false, error: msg }
@@ -110,67 +113,34 @@ export async function initializeGitBashOnStartup(): Promise<{
     return { available: true, needsSetup: false, mockMode: false, path: '/bin/bash' }
   }
 
-  const { existsSync } = require('fs')
-  const config = getConfig() as any
+  const status = resolveGitBashAvailability(getConfig() as any, (gitBash) => {
+    saveConfig({ gitBash } as any)
+  })
 
-  // Case 1: Config says installed with a specific path - VALIDATE it still exists
-  if (config.gitBash?.installed && config.gitBash?.path) {
-    const savedPath = config.gitBash.path
-
-    if (existsSync(savedPath)) {
-      // Saved path is valid, use it
-      setGitBashPathEnv(savedPath)
-      console.log('[GitBash] Using saved path:', savedPath)
-      return { available: true, needsSetup: false, mockMode: false, path: savedPath }
-    } else {
-      // Saved path is STALE (Git Bash was deleted)
-      console.log('[GitBash] Saved path no longer exists:', savedPath)
-
-      // Clear the stale config
-      saveConfig({
-        gitBash: {
-          installed: false,
-          path: null,
-          skipped: false
-        }
-      } as any)
-
-      console.log('[GitBash] Cleared stale config, will re-detect')
-
-      // Fall through to fresh detection below
-    }
+  if (status.path && !status.mockMode) {
+    setGitBashPathEnv(status.path)
+    console.log('[GitBash] Real Git Bash active:', status.path)
+    cleanupMockBash()
   }
 
-  // Case 2: User previously skipped - use mock mode
-  if (config.gitBash?.skipped) {
+  if (status.mockMode) {
     const mockPath = createMockBash()
     setGitBashPathEnv(mockPath)
-    console.log('[GitBash] Mock mode active (user skipped)')
+    console.log('[GitBash] Mock mode active (real Git Bash unavailable)')
     return { available: true, needsSetup: false, mockMode: true, path: mockPath }
   }
 
-  // Case 3: Fresh detection - try to find Git Bash on system
-  const detection = detectGitBash()
-
-  if (detection.found && detection.path) {
-    // Git Bash found on system, save and use it
-    setGitBashPathEnv(detection.path)
-
-    saveConfig({
-      gitBash: {
-        installed: true,
-        path: detection.path,
-        skipped: false
-      }
-    } as any)
-
-    console.log('[GitBash] Detected system Git Bash:', detection.path)
-    return { available: true, needsSetup: false, mockMode: false, path: detection.path }
+  if (status.needsSetup) {
+    console.log('[GitBash] Not found, setup required')
   }
 
-  // Case 4: Git Bash not found anywhere - needs setup
-  console.log('[GitBash] Not found, setup required')
-  return { available: false, needsSetup: true, mockMode: false, path: null, configCleared: true }
+  return {
+    available: status.available,
+    needsSetup: status.needsSetup,
+    mockMode: false,
+    path: status.path,
+    configCleared: status.configUpdated
+  }
 }
 
 /**

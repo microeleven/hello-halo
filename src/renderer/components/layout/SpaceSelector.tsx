@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Settings2 } from 'lucide-react'
+import { ChevronDown, Settings2, Unplug } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { SpaceIcon } from '../icons/ToolIcons'
@@ -77,6 +77,10 @@ export function SpaceSelector() {
   }, [isOpen])
 
   const handleSelectSpace = (space: Space) => {
+    if (space.isMissing) {
+      setIsOpen(false)
+      return
+    }
     if (space.id === currentSpace?.id) {
       setIsOpen(false)
       return
@@ -133,13 +137,18 @@ export function SpaceSelector() {
               <button
                 key={space.id}
                 onClick={() => handleSelectSpace(space)}
-                className={`w-full px-3 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors flex items-center gap-2.5 ${
-                  isActive ? 'text-primary bg-primary/5' : 'text-foreground'
+                className={`w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2.5 ${
+                  space.isMissing
+                    ? 'text-muted-foreground cursor-not-allowed opacity-70'
+                    : `hover:bg-secondary/80 ${isActive ? 'text-primary bg-primary/5' : 'text-foreground'}`
                 }`}
               >
                 <SpaceIcon iconId={space.icon || (space.isTemp ? 'sparkles' : 'folder')} size={16} className="flex-shrink-0" />
-                <span className="truncate">{name}</span>
-                {isActive && (
+                <span className="truncate flex-1 min-w-0">{name}</span>
+                {space.isMissing && (
+                  <Unplug className="w-3.5 h-3.5 flex-shrink-0" aria-label={t('Unavailable')} />
+                )}
+                {isActive && !space.isMissing && (
                   <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
                 )}
               </button>

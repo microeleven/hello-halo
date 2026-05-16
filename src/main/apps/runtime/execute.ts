@@ -106,8 +106,8 @@ interface StreamResult {
 // Constants
 // ============================================
 
-/** Max turns per stream cycle for automation runs (higher than conversation's 50 for autonomous operation) */
-const MAX_TURNS = 100
+/** Default max turns per stream cycle for automation runs when not configured by user */
+const DEFAULT_MAX_TURNS = 100
 
 /**
  * Max auto-continue attempts when AI ends without calling report_to_user.
@@ -413,7 +413,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Override SDK options for automation context
     sdkOptions.systemPrompt = systemPrompt
-    sdkOptions.maxTurns = MAX_TURNS
+    sdkOptions.maxTurns = config.agent?.maxTurns ?? DEFAULT_MAX_TURNS
     // Automation runs don't need token-level streaming
     sdkOptions.includePartialMessages = false
     // Enable extended thinking for automation runs (same as interactive chat)
@@ -422,7 +422,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const mcpServerNames = sdkOptions.mcpServers ? Object.keys(sdkOptions.mcpServers) : []
     console.log(
       `[Runtime][${runTag}] Creating V2 session: workDir=${workDir}, ` +
-      `promptLen=${systemPrompt.length}, maxTurns=${MAX_TURNS}, ` +
+      `promptLen=${systemPrompt.length}, maxTurns=${sdkOptions.maxTurns}, ` +
       `mcpServers=[${mcpServerNames.join(', ')}], aiBrowser=${usesAIBrowser}, email=${usesEmail}`
     )
     console.debug(`[Runtime][${runTag}] SDK options: model=${sdkOptions.model}, allowedTools=${(sdkOptions.allowedTools || []).length}, disallowedTools=${(sdkOptions.disallowedTools || []).length}, maxThinkingTokens=${sdkOptions.maxThinkingTokens}`)

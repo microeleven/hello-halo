@@ -11,7 +11,7 @@
  * - listSpaces() is pure memory read — zero disk I/O after startup
  * - getSpace() is pure memory read — zero disk I/O (no preferences)
  * - getSpaceWithPreferences() loads preferences from meta.json on demand (for IPC/UI only)
- * - listSpaces() validates paths in batch; invalid entries are cleaned up
+ * - listSpaces() preserves missing paths and marks them unavailable instead of deleting entries
  */
 
 import { shell } from 'electron'
@@ -39,6 +39,7 @@ interface Space {
   lastActiveAt?: string  // Last user activity time (cached, used for sorting/display)
   preferences?: SpacePreferences
   workingDir?: string  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
+  isMissing?: boolean  // True when the space data path is currently unavailable (e.g. external drive disconnected)
 }
 
 interface SpaceLayoutPreferences {
@@ -287,7 +288,8 @@ function entryToSpace(id: string, entry: SpaceIndexEntry): Space {
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     lastActiveAt: entry.lastActiveAt,
-    workingDir: entry.workingDir
+    workingDir: entry.workingDir,
+    isMissing: !entry.isTemp && !existsSync(entry.path)
   }
 }
 
@@ -296,6 +298,9 @@ function entryToSpace(id: string, entry: SpaceIndexEntry): Space {
  */
 function entryToSpaceWithPreferences(id: string, entry: SpaceIndexEntry): Space {
   const space = entryToSpace(id, entry)
+  if (space.isMissing) {
+    return space
+  }
   const meta = tryReadMeta(entry.path)
   if (meta?.preferences) {
     space.preferences = meta.preferences
@@ -331,31 +336,24 @@ export function getSpaceWithPreferences(spaceId: string): Space | null {
 }
 
 /**
- * List all spaces. Pure memory read — zero disk I/O.
- * Validates paths in batch; removes invalid entries.
+ * List all spaces. Pure memory read — zero disk I/O except lightweight path existence checks.
+ * Missing paths are preserved in the index and returned with isMissing=true so users can
+ * reconnect external drives or recover legacy spaces without data loss.
  * Does NOT include preferences (not needed for dropdown display).
  */
 export function listSpaces(): Space[] {
   const spaces: Space[] = []
-  const invalidIds: string[] = []
+  let missingCount = 0
 
   for (const [id, entry] of getRegistry()) {
     if (entry.isTemp) continue  // halo-temp is returned via getHaloSpace()
 
-    if (!existsSync(entry.path)) {
-      invalidIds.push(id)
-      continue
+    const space = entryToSpace(id, entry)
+    if (space.isMissing) {
+      missingCount += 1
+      console.warn(`[Space] Space ${id} path unavailable, preserving index entry: ${entry.path}`)
     }
-    spaces.push(entryToSpace(id, entry))
-  }
-
-  // Batch cleanup invalid entries
-  if (invalidIds.length > 0) {
-    for (const id of invalidIds) {
-      console.warn(`[Space] Space ${id} path invalid, removing from index`)
-      getRegistry().delete(id)
-    }
-    persistIndex(getRegistry())
+    spaces.push(space)
   }
 
   // Sort by most recent activity. lastActiveAt reflects actual user activity
@@ -366,7 +364,7 @@ export function listSpaces(): Space[] {
     const bTime = new Date(b.lastActiveAt || b.updatedAt).getTime()
     return bTime - aTime
   })
-  console.log('[Space] listSpaces: count=%d', spaces.length)
+  console.log('[Space] listSpaces: count=%d missing=%d', spaces.length, missingCount)
   return spaces
 }
 
@@ -378,8 +376,10 @@ export function getAllSpacePaths(): string[] {
   const paths: string[] = []
 
   for (const [, entry] of getRegistry()) {
-    paths.push(entry.path)
-    if (entry.workingDir) {
+    if (existsSync(entry.path)) {
+      paths.push(entry.path)
+    }
+    if (entry.workingDir && existsSync(entry.workingDir)) {
       paths.push(entry.workingDir)
     }
   }
@@ -709,6 +709,11 @@ export function writeOnboardingArtifact(spaceId: string, fileName: string, conte
     return false
   }
 
+  if (space.isMissing) {
+    console.error(`[Space] writeOnboardingArtifact: Space path unavailable: ${spaceId}`)
+    return false
+  }
+
   try {
     const artifactsDir = space.isTemp
       ? join(space.path, 'artifacts')
@@ -738,8 +743,12 @@ export function saveOnboardingConversation(
     return null
   }
 
+  if (space.isMissing) {
+    console.error(`[Space] saveOnboardingConversation: Space path unavailable: ${spaceId}`)
+    return null
+  }
+
   try {
-    const { v4: uuidv4 } = require('uuid')
     const conversationId = uuidv4()
     const now = new Date().toISOString()
 

@@ -12,6 +12,7 @@ import { MessageItem } from './MessageItem'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { TeamSnapshotPanel } from './TeamPanel'
 import { InjectionAnnotation } from './InjectionAnnotation'
+import { useAppStore } from '../../stores/app.store'
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
@@ -54,6 +55,9 @@ export const MessageRow = memo(function MessageRow({
   injectionMessages,
   className = '',
 }: MessageRowProps) {
+  const { config } = useAppStore()
+  const annotationsEnabled = config?.annotations?.enabled ?? true
+  const shouldShowInjections = annotationsEnabled && !!injectionMessages && injectionMessages.length > 0
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 
@@ -99,7 +103,7 @@ export const MessageRow = memo(function MessageRow({
           )}
 
           {/* Injection annotation — permanently shows mid-turn user messages */}
-          {injectionMessages && injectionMessages.length > 0 && (
+          {shouldShowInjections && (
             <InjectionAnnotation messages={injectionMessages} />
           )}
         </div>
@@ -109,7 +113,7 @@ export const MessageRow = memo(function MessageRow({
 
   // Regular messages (user, or assistant without thoughts)
   // Assistant messages without thoughts may still have injection annotations
-  const hasInjections = injectionMessages && injectionMessages.length > 0
+  const hasInjections = shouldShowInjections
   if (message.role === 'assistant' && hasInjections) {
     return (
       <div className={`pb-4 ${className}`}>

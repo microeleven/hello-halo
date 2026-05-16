@@ -10,7 +10,7 @@
  *   - Skill: name, content (markdown)
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { X, Server, BookOpen, ChevronLeft, Plus, Settings2, Code, AlertCircle } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -31,13 +31,33 @@ interface ManualAddDialogProps {
   onClose: () => void
   /** Called when the user picks "Skill" — the caller opens SkillInstallDialog instead */
   onSkillAdd?: () => void
+  /**
+   * Pre-selects the add type, skipping the choose step.
+   * Use 'mcp' to jump directly into the MCP form (from the My MCP tab).
+   * Use 'skill' to immediately delegate to SkillInstallDialog via onSkillAdd.
+   */
+  initialType?: AddType
 }
 
-export function ManualAddDialog({ onClose, onSkillAdd }: ManualAddDialogProps) {
+export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddDialogProps) {
   const { t } = useTranslation()
   const { installApp, loadApps } = useAppsStore()
-  const [step, setStep] = useState<'choose' | 'form'>('choose')
-  const [addType, setAddType] = useState<AddType | null>(null)
+
+  // If initialType is provided, jump straight to the corresponding form/delegate.
+  const startInForm = initialType === 'mcp'
+  const [step, setStep] = useState<'choose' | 'form'>(startInForm ? 'form' : 'choose')
+  const [addType, setAddType] = useState<AddType | null>(startInForm ? 'mcp' : null)
+
+  // If caller asked for skill, defer to onSkillAdd on mount and close.
+  // (Renderer effects run after first paint; close happens fast enough to feel like a direct hop.)
+  useEffect(() => {
+    if (initialType === 'skill' && onSkillAdd) {
+      onClose()
+      onSkillAdd()
+    }
+    // Run once on mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleChoose = (type: AddType) => {
     if (type === 'skill' && onSkillAdd) {
@@ -59,7 +79,7 @@ export function ManualAddDialog({ onClose, onSkillAdd }: ManualAddDialogProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
-            {step === 'form' && (
+            {step === 'form' && !initialType && (
               <button
                 onClick={() => { setStep('choose'); setAddType(null) }}
                 className="p-1 hover:bg-secondary rounded transition-colors mr-1"

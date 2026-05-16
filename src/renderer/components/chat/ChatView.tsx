@@ -29,6 +29,7 @@ import { api } from '../../api'
 import type { ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { useTranslation } from '../../i18n'
+import { useEngineCapabilities } from '../../stores/engine.store'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -428,6 +429,12 @@ function LoadingState() {
 // Empty state component - adapts to compact mode
 function EmptyState({ isTemp, isCompact = false }: { isTemp: boolean; isCompact?: boolean }) {
   const { t } = useTranslation()
+  // Reflect the actual driving engine ("Claude Code" / "Codex" / "Halo SDK")
+  // so a user creating a new conversation immediately sees what's powering
+  // it, rather than a hardcoded brand name.
+  const capabilities = useEngineCapabilities()
+  const engineDisplayName = capabilities?.displayName ?? 'Claude Code'
+
   // Compact mode shows minimal UI
   if (isCompact) {
     return (
@@ -456,7 +463,7 @@ function EmptyState({ isTemp, isCompact = false }: { isTemp: boolean; isCompact?
       {/* Powered by badge - simplified */}
       <div className="mt-8 px-3 py-1.5 rounded-full border border-border">
         <span className="text-xs text-muted-foreground">
-          Powered by Claude Code
+          {t('Powered by {{name}}', { name: engineDisplayName })}
         </span>
       </div>
     </div>

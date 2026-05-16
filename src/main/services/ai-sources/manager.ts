@@ -296,12 +296,14 @@ class AISourceManager {
         console.warn(`[AISourceManager] No provider found for OAuth source: ${source.provider}`)
         return null
       }
-      const legacyConfig = this.buildLegacyOAuthConfig(source)
-      const config = provider.getBackendConfig(legacyConfig)
-      if (config && modelId) {
-        config.model = modelId
-      }
-      return config
+      // Substitute the override model into the legacy config BEFORE calling
+      // provider.getBackendConfig, so model-derived fields (anthropic-beta
+      // header, endpoint URL, etc.) are computed against the effective model
+      // — not against source.model. See buildLegacyOAuthConfig() for the full
+      // rationale; a post-call `config.model = modelId` patch (the previous
+      // behaviour) is unsafe because it leaves derived headers stale.
+      const legacyConfig = this.buildLegacyOAuthConfig(source, modelId)
+      return provider.getBackendConfig(legacyConfig)
     }
 
     // API Key: build config directly
@@ -805,15 +807,39 @@ class AISourceManager {
 
   /**
    * Build legacy OAuth config format for provider.getBackendConfig()
-   * Converts v2 AISource to v1 format expected by OAuth providers
+   * Converts v2 AISource to v1 format expected by OAuth providers.
+   *
+   * IMPORTANT — single source of truth for model-derived fields:
+   *   Some providers (e.g. claude, github-copilot) derive other fields from
+   *   `model` inside getBackendConfig() — for example, claude.provider adds
+   *   the `context-1m-2025-08-07` anthropic-beta header iff the model has a
+   *   `[1m]` suffix; github-copilot picks the Anthropic vs OpenAI endpoint
+   *   based on `model.startsWith('claude-')`.
+   *
+   *   When a per-app override model is in play, we MUST substitute it into
+   *   the legacy config BEFORE handing it to the provider — otherwise the
+   *   provider sees the source's default model, computes derived fields
+   *   against that, and any later `config.model = overrideModel` patch is
+   *   incomplete (model field is right, headers/url are wrong). That mismatch
+   *   has caused production 429s when the source default was a `[1m]` variant
+   *   but a digital human override picked a non-1m model: the request body
+   *   carried the non-1m model id, but the header still requested the 1m beta,
+   *   pinning the call to the long-context billing tier.
+   *
+   * @param source         The v2 AISource record
+   * @param overrideModel  Optional per-call model override (e.g. from an
+   *                       app's userOverrides.modelId). When provided, it
+   *                       fully replaces source.model in the legacy config
+   *                       so all derived fields are computed against it.
    */
-  private buildLegacyOAuthConfig(source: AISource): any {
+  private buildLegacyOAuthConfig(source: AISource, overrideModel?: string): any {
+    const effectiveModel = overrideModel || source.model
     return {
       current: source.provider,
       [source.provider]: {
         loggedIn: true,
         user: source.user,
-        model: source.model,
+        model: effectiveModel,
         availableModels: source.availableModels.map(m => m.id),
         accessToken: source.accessToken,
         refreshToken: source.refreshToken,

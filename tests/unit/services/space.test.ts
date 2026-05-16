@@ -21,7 +21,7 @@ import {
   _resetSpaceRegistry,
   _resetActivityState
 } from '../../../src/main/services/space.service'
-import { initializeApp, getSpacesDir, getTempSpacePath } from '../../../src/main/services/config.service'
+import { initializeApp, getHaloDir, getSpacesDir, getTempSpacePath } from '../../../src/main/services/config.service'
 
 describe('Space Service', () => {
   beforeEach(async () => {
@@ -250,6 +250,65 @@ describe('Space Service', () => {
       const spaces = listSpaces()
       expect(spaces.length).toBe(2)
       expect(spaces[0].id).toBe(spaceA.id)
+    })
+  })
+
+  describe('missing spaces', () => {
+    it('should preserve unavailable spaces in the index and mark them missing', () => {
+      const haloDir = getHaloDir()
+      const indexPath = path.join(haloDir, 'spaces-index.json')
+      const missingPath = path.join(globalThis.__HALO_TEST_DIR__, 'external-drive', 'missing-project')
+      const missingId = 'missing-space-id'
+
+      fs.writeFileSync(indexPath, JSON.stringify({
+        version: 3,
+        spaces: {
+          [missingId]: {
+            path: missingPath,
+            name: 'External Project',
+            icon: 'folder',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            workingDir: missingPath
+          }
+        }
+      }, null, 2))
+
+      _resetSpaceRegistry()
+
+      const spaces = listSpaces()
+      expect(spaces).toHaveLength(1)
+      expect(spaces[0].id).toBe(missingId)
+      expect(spaces[0].isMissing).toBe(true)
+
+      const persisted = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+      expect(persisted.spaces[missingId]).toBeDefined()
+    })
+
+    it('should exclude unavailable paths from security allowlist', () => {
+      const haloDir = getHaloDir()
+      const indexPath = path.join(haloDir, 'spaces-index.json')
+      const missingPath = path.join(globalThis.__HALO_TEST_DIR__, 'external-drive', 'missing-project')
+      const missingId = 'missing-space-id'
+
+      fs.writeFileSync(indexPath, JSON.stringify({
+        version: 3,
+        spaces: {
+          [missingId]: {
+            path: missingPath,
+            name: 'External Project',
+            icon: 'folder',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            workingDir: missingPath
+          }
+        }
+      }, null, 2))
+
+      _resetSpaceRegistry()
+
+      const paths = getAllSpacePaths()
+      expect(paths).not.toContain(missingPath)
     })
   })
 

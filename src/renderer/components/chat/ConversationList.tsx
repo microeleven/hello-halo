@@ -17,6 +17,7 @@ import { api } from '../../api'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { PulseSidebarSection } from '../pulse/PulseSidebarSection'
 import { AutomationBadge } from '../apps/AutomationBadge'
+import { EngineBadge } from './EngineBadge'
 import type { ConversationMeta } from '../../types'
 
 // Width constraints (in pixels)
@@ -300,6 +301,9 @@ export const ConversationList = memo(function ConversationList({
             <span className="text-sm truncate flex-1">
               {conversation.title}
             </span>
+            {/* Engine badge — visible only for non-default engines (Codex / Halo SDK).
+                Anthropic conversations render nothing to keep the UI uncluttered. */}
+            <EngineBadge engineId={conversation.engineId} size="xs" className="ml-1" />
             {/* Absolutely positioned so idle placeholder doesn't steal title space */}
             <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none">
               <TaskStatusDot status={conversationStatuses.get(conversation.id) ?? 'idle'} size="sm" />

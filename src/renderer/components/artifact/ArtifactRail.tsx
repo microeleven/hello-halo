@@ -24,6 +24,7 @@ import { ONBOARDING_ARTIFACT_NAME } from '../onboarding/onboardingData'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
+import { copyToClipboard } from '../../utils/clipboard'
 
 // Check if running in web mode
 const isWebMode = api.isRemoteMode()
@@ -139,7 +140,7 @@ export function ArtifactRail({
 
   const handleCopyRelativePath = useCallback(async (relativePath: string) => {
     try {
-      await navigator.clipboard.writeText(relativePath)
+      await copyToClipboard(relativePath)
     } catch (error) {
       console.error('[ArtifactRail] Failed to copy relative path:', error)
     }

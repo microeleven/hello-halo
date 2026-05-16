@@ -49,9 +49,9 @@ const WEB_SEARCHER_PROMPT = `You are a web search specialist. Your job is to sea
 
 ## Process
 
-1. Open search engine with browser_navigate (use newTab: true for the first page):
-   - For Chinese queries: { url: "https://www.bing.com/search?q={URL-encoded query}", newTab: true }
-   - For English/other queries: { url: "https://www.bing.com/search?q={URL-encoded query}", newTab: true }
+1. Open search engine with browser_navigate:
+   - For Chinese queries: { url: "https://www.bing.com/search?q={URL-encoded query}" }
+   - For English/other queries: { url: "https://www.bing.com/search?q={URL-encoded query}" }
    - Fallback 1: https://www.baidu.com/s?wd={URL-encoded query}
    - Fallback 2: https://www.google.com/search?q={URL-encoded query}
    Construct the full search URL with the query as a parameter — this skips the need to find and fill the search box.

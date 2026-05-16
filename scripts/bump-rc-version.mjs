@@ -2,9 +2,14 @@
 /**
  * Bump RC version before internal builds.
  *
- * Rules:
- *   2.0.8        → 2.0.8-rc.1  (stable → same version rc.1)
- *   2.0.8-rc.1   → 2.0.8-rc.2  (rc → increment rc number)
+ * Rules (matches the trailing -rc.N segment, regardless of what precedes it):
+ *   2.1.7              → 2.1.7-rc.1            (stable → append rc.1)
+ *   2.1.7-rc.1         → 2.1.7-rc.2            (rc → increment rc number)
+ *   2.1.9-dev.0        → 2.1.9-dev.0-rc.1      (prerelease base → append rc.1)
+ *   2.1.9-dev.0-rc.1   → 2.1.9-dev.0-rc.2      (prerelease+rc → increment rc number)
+ *
+ * The match is anchored to the END of the string only, so an existing
+ * prerelease tag (e.g. -dev.0) is preserved and rc segments never stack.
  *
  * To release a new stable version, manually run: npm version patch/minor/major
  */
@@ -21,14 +26,14 @@ const current = pkg.version
 
 let next
 
-const rcMatch = current.match(/^(\d+\.\d+\.\d+)-rc\.(\d+)$/);
-if (rcMatch) {
-  // Already an RC: bump rc number
-  const base = rcMatch[1]
-  const rcNum = parseInt(rcMatch[2], 10)
-  next = `${base}-rc.${rcNum + 1}`
+const trailingRc = current.match(/^(.*)-rc\.(\d+)$/)
+if (trailingRc) {
+  // Already ends with -rc.N: bump rc number, keep everything before it
+  const prefix = trailingRc[1]
+  const rcNum = parseInt(trailingRc[2], 10)
+  next = `${prefix}-rc.${rcNum + 1}`
 } else {
-  // Stable version: start rc.1 on same version
+  // No trailing rc segment: append rc.1
   next = `${current}-rc.1`
 }
 

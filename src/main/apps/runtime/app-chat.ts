@@ -566,8 +566,17 @@ export async function sendAppChatMessage(
           }
         },
         onRawMessage: (sdkMessage) => {
-          // Persist SDK messages to JSONL for "View process" / reload recovery
-          // stream_events are too granular for JSONL (hundreds per response)
+          // Persist SDK messages to JSONL for "View process" / reload recovery.
+          //
+          // We skip `stream_event` for both engines: token-level deltas are
+          // too granular for JSONL (hundreds per response) and the engine
+          // adapters are required to ALSO emit aggregate top-level
+          // `assistant`/`user` envelopes (see services/agent/codex/event-
+          // normalizer.ts → aggregateBlock). The aggregates are what
+          // session-store.convertEventsToMessages reconstructs the chat
+          // history from. Engine-specific persistence gates here are a
+          // protocol-conformance smell; if a future engine needs them, fix
+          // the engine adapter, not this consumer.
           if (sessionWriter && sdkMessage.type !== 'stream_event') {
             sessionWriter.writeEvent(sdkMessage)
           }

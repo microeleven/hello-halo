@@ -1,19 +1,19 @@
 /**
  * Tab Management Tool (1 tool)
  *
- * Manage browser tabs: list, switch, close.
- * Consolidates browser_list_pages, browser_select_page, and browser_close_page
- * into a single intent-level tool.
+ * Manage browser tabs: list, open, switch, close.
+ * Consolidates browser_list_pages, browser_new_page, browser_select_page, and
+ * browser_close_page into a single intent-level tool.
  *
- * The original per-action tools remain available as standalone exports
- * in navigation.ts for future extension/advanced mode.
+ * Browser history actions are intentionally not exposed here. They depend on
+ * invisible history state and are better handled by browser_evaluate when needed.
  */
 
 import { z } from 'zod'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
-import { browserViewManager } from '../../browser-view.service'
-import { textResult } from './helpers'
+import { browserViewManager, type DeviceMode } from '../../browser-view.service'
+import { textResult, NAV_TIMEOUT } from './helpers'
 
 const log = (...args: unknown[]) => console.log('[AI Browser][tab]', ...args)
 
@@ -21,22 +21,33 @@ export function buildTabTools(ctx: BrowserContext) {
 
 const browser_tab = tool(
   'browser_tab',
-  `Manage browser tabs: list all open tabs, switch between them, or close a tab.
+  `Manage browser tabs: list all open tabs, open a new tab, switch between tabs, or close a tab.
 
 Examples:
   List all tabs:              { action: "list" }
+  Open a new tab:             { action: "new", url: "https://example.com" }
+  Open a mobile new tab:      { action: "new", url: "https://m.example.com", device: "h5" }
   Switch to tab at index 2:   { action: "select", pageIdx: 2 }
   Close tab at index 1:       { action: "close", pageIdx: 1 }
 
-After switching tabs with "select", take a browser_snapshot to see the selected tab's content and get fresh UIDs. Tab indices may shift after closing a tab — use "list" to get current indices.
+Use browser_navigate for normal page opening. Use action: "new" only when you need to keep the current page open. After "new" or "select", take a browser_snapshot to see the active tab's content and get fresh UIDs. Tab indices may shift after closing a tab — use "list" to get current indices.
 
 The last remaining tab cannot be closed.`,
   {
-    action: z.enum(['list', 'select', 'close']).describe(
-      'Tab management action: "list" shows all open tabs with index/title/URL, "select" switches to a tab, "close" closes a tab.'
+    action: z.enum(['list', 'new', 'select', 'close']).describe(
+      'Tab management action: "list" shows tabs, "new" opens a new tab, "select" switches tabs, "close" closes a tab.'
+    ),
+    url: z.string().optional().describe(
+      'URL to open. Required for action: "new".'
+    ),
+    device: z.enum(['pc', 'h5']).optional().describe(
+      'Device mode for action: "new". "h5" emulates mobile (iPhone UA, 390×844 viewport). Default: "pc".'
     ),
     pageIdx: z.number().optional().describe(
       'Tab index — required for "select" and "close". Get indices from action: "list".'
+    ),
+    timeout: z.number().int().optional().describe(
+      'Maximum wait time in milliseconds for action: "new" page load. Default: 30000. Set to 0 to use default.'
     )
   },
   async (args) => {
@@ -52,6 +63,35 @@ The last remaining tab cannot be closed.`,
           lines.push(`[${index}] ${state.title || 'Untitled'} - ${state.url || 'about:blank'}`)
         })
         return textResult(lines.join('\n'))
+      }
+
+      case 'new': {
+        if (!args.url) {
+          return textResult('url is required for action "new".', true)
+        }
+
+        const timeout = (args.timeout && args.timeout > 0) ? args.timeout : NAV_TIMEOUT
+        const deviceMode: DeviceMode = args.device ?? 'pc'
+
+        try {
+          const viewId = `ai-browser-${Date.now()}`
+          await browserViewManager.create(viewId, args.url, {
+            offscreen: ctx.isScoped,
+            deviceMode,
+          })
+          ctx.trackView(viewId)
+          ctx.setActiveViewId(viewId)
+          await ctx.waitForNavigation(timeout)
+
+          const finalState = browserViewManager.getState(viewId)
+          const modeLabel = deviceMode === 'h5' ? ' [H5 mobile mode]' : ''
+          log(`new page: ${viewId}, deviceMode=${deviceMode}`)
+          return textResult(
+            `Created page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}`
+          )
+        } catch (error) {
+          return textResult(`Failed to create page: ${(error as Error).message}`, true)
+        }
       }
 
       case 'select': {
@@ -87,11 +127,9 @@ The last remaining tab cannot be closed.`,
         browserViewManager.destroy(closedState.id)
         log(`close page [${args.pageIdx}]: ${closedState.id}, wasActive=${wasActive}`)
 
-        // If we closed the active tab, switch to the nearest remaining tab
         if (wasActive) {
           const remaining = browserViewManager.getAllStates()
           if (remaining.length > 0) {
-            // Prefer the tab at the same index; fall back to the last tab
             const newIdx = Math.min(args.pageIdx, remaining.length - 1)
             ctx.setActiveViewId(remaining[newIdx].id)
             log(`auto-switched to page [${newIdx}]: ${remaining[newIdx].id}`)

@@ -47,6 +47,14 @@ const NODE_PTY_PREBUILD_TARGETS = {
   'win32-x64':    'win32-x64',
 };
 
+// Maps platform-arch to the @openai/codex native package required at runtime.
+const CODEX_TARGETS = {
+  'darwin-arm64': { packageName: 'codex-darwin-arm64', targetTriple: 'aarch64-apple-darwin', binaryName: 'codex' },
+  'darwin-x64':   { packageName: 'codex-darwin-x64', targetTriple: 'x86_64-apple-darwin', binaryName: 'codex' },
+  'win32-x64':    { packageName: 'codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc', binaryName: 'codex.exe' },
+  'linux-x64':    { packageName: 'codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binaryName: 'codex' },
+};
+
 /**
  * Resolve the app.asar.unpacked directory from electron-builder context.
  *
@@ -208,6 +216,62 @@ function cleanNodePtyPrebuilds(context) {
 }
 
 /**
+ * Keep only the Codex native package for the target app architecture and fail
+ * early if the required binary is missing. npm installs Codex's native binary
+ * through host-filtered optional dependencies, so cross-arch builds must run
+ * prepare-binaries first.
+ */
+function cleanAndValidateCodexNativePackage(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${platform}-${archStr}`;
+  const target = CODEX_TARGETS[key];
+
+  if (!target) {
+    console.warn(`[afterPack] No Codex native package mapping for ${key}, skipping cleanup`);
+    return;
+  }
+
+  const unpackedDir = getUnpackedDir(context);
+  const openaiDir = path.join(unpackedDir, 'node_modules', '@openai');
+  if (!fs.existsSync(openaiDir)) {
+    console.warn(`[afterPack] No @openai dir in unpacked output, skipping Codex cleanup`);
+    return;
+  }
+
+  const targetDir = path.join(openaiDir, target.packageName);
+  const targetBinary = path.join(
+    targetDir,
+    'vendor',
+    target.targetTriple,
+    'codex',
+    target.binaryName
+  );
+
+  if (!fs.existsSync(targetBinary)) {
+    console.error(`[afterPack] ${key}: missing Codex native binary: ${targetBinary}`);
+    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform/cross-arch packaging`);
+    throw new Error(`Missing @openai/${target.packageName} native binary for ${key}`);
+  }
+
+  const entries = fs.readdirSync(openaiDir, { withFileTypes: true });
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!/^codex-(darwin|linux|win32)-/.test(entry.name)) continue;
+    if (entry.name === target.packageName) continue;
+
+    fs.rmSync(path.join(openaiDir, entry.name), { recursive: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    console.log(`[afterPack] ${key}: removed ${removed.length} non-target Codex package(s): ${removed.join(', ')}`);
+  }
+  console.log(`[afterPack] ${key}: keeping @openai/${target.packageName}`);
+}
+
+/**
  * Ensure all native binaries in the unpacked output have executable permission.
  *
  * npm packages occasionally ship tarballs with missing +x on vendored binaries
@@ -322,6 +386,9 @@ module.exports = async function(context) {
 
   // Clean non-target node-pty prebuild directories and strip .pdb files
   cleanNodePtyPrebuilds(context);
+
+  // Ensure the packaged app contains the Codex native binary for this arch.
+  cleanAndValidateCodexNativePackage(context);
 
   // Ensure all native binaries in unpacked output have +x permission.
   // Defends against upstream npm packages shipping broken permissions

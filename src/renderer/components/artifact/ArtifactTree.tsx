@@ -23,6 +23,7 @@ import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useNotificationStore } from '../../stores/notification.store'
 import { useFileOperations } from '../../hooks/useFileOperations'
+import { copyToClipboard } from '../../utils/clipboard'
 
 // Context to pass openFile function to tree nodes without each node subscribing to store
 type OpenFileFn = (path: string, title?: string) => Promise<void>
@@ -1013,7 +1014,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
       label: t('Copy relative path'),
       icon: <Copy className="w-4 h-4" />,
       onClick: () => {
-        navigator.clipboard.writeText(data.relativePath).catch(err =>
+        copyToClipboard(data.relativePath).catch(err =>
           console.error('Failed to copy relative path:', err)
         )
       }

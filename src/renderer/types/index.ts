@@ -123,7 +123,7 @@ export interface SystemConfig {
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
   promptProfile?: 'official' | 'halo';  // System prompt profile
-  sdkEngine?: 'anthropic' | 'halo';  // Agent SDK engine (requires restart)
+  sdkEngine?: 'anthropic' | 'halo' | 'codex';  // Agent SDK engine (requires restart)
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableTeams?: boolean;    // Enable Agent Teams (multi-agent collaboration)
@@ -296,6 +296,7 @@ export interface Space {
   lastActiveAt?: string;  // Last user activity time (conversations/messages)
   preferences?: SpacePreferences;  // User preferences for this space
   workingDir?: string;  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
+  isMissing?: boolean;  // True when the space data path is currently unavailable
 }
 
 export interface CreateSpaceInput {
@@ -308,6 +309,9 @@ export interface CreateSpaceInput {
 // Conversation Types
 // ============================================
 
+/** Agent engine that owns a conversation. Used for the EngineBadge UI. */
+export type EngineId = 'anthropic' | 'halo' | 'codex';
+
 // Lightweight metadata for conversation list (no messages)
 // Used by listConversations for fast loading
 export interface ConversationMeta {
@@ -319,6 +323,8 @@ export interface ConversationMeta {
   messageCount: number;
   preview?: string;  // Last message preview (truncated)
   starred?: boolean; // Pinned conversation for quick access
+  /** Engine recorded at conversation creation. Read with `?? 'anthropic'` fallback. */
+  engineId?: EngineId | null;
 }
 
 // ============================================
@@ -350,6 +356,40 @@ export interface Conversation extends ConversationMeta {
   messages: Message[];
   sessionId?: string;
   version?: number;  // Format version: 2 = thoughts separated into .thoughts.json
+}
+
+// ============================================
+// Engine Capabilities (mirrors main/services/agent/capabilities.ts)
+// ============================================
+
+export type ToolKind =
+  | 'Bash' | 'Read' | 'Write' | 'Edit' | 'Grep' | 'Glob'
+  | 'WebSearch' | 'WebFetch' | 'TodoWrite' | 'Task'
+  | 'Skill' | 'AskUserQuestion' | 'NotebookEdit' | 'Mcp' | 'Unknown';
+
+export type TodoState = 'pending' | 'in_progress' | 'completed';
+
+export interface EngineCapabilities {
+  engineId: EngineId;
+  displayName: string;
+  streaming: {
+    text: 'token' | 'item' | 'turn';
+    reasoning: 'token' | 'item' | 'final-only' | 'none';
+    toolInput: 'token' | 'final-only';
+    toolOutput: 'token' | 'final-only';
+  };
+  tools: {
+    native: ToolKind[];
+    synthetic: { kind: ToolKind; from: string; lossy: boolean }[];
+    shellHeuristics: boolean;
+  };
+  todo: { states: TodoState[]; hasActiveForm: boolean };
+  subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
+  features: {
+    skills: boolean; mcp: boolean; hooks: boolean;
+    sessionResume: boolean; midTurnInjection: boolean; interrupt: boolean;
+    multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
+  };
 }
 
 // ============================================

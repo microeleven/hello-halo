@@ -569,6 +569,15 @@ export const api = {
     return result as { success: boolean; servers: unknown[]; error?: string }
   },
 
+  // Get the active engine's capability descriptor. Renderer caches this in
+  // a Zustand store and uses the flags to drive engine-aware UI affordances.
+  getEngineCapabilities: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getEngineCapabilities()
+    }
+    return httpRequest('GET', '/api/agent/engine-capabilities')
+  },
+
   // ===== Artifact =====
   listArtifacts: async (spaceId: string, maxDepth: number = 2): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -1441,11 +1450,12 @@ export const api = {
   getGitBashStatus: async (): Promise<ApiResponse<{
     found: boolean
     path: string | null
-    source: 'system' | 'app-local' | 'env-var' | null
+    source: 'system' | 'app-local' | 'env-var' | 'mock' | null
+    mockMode?: boolean
   }>> => {
     if (!isElectron()) {
       // In remote mode, assume Git Bash is available (server handles it)
-      return { success: true, data: { found: true, path: null, source: null } }
+      return { success: true, data: { found: true, path: null, source: null, mockMode: false } }
     }
     return window.halo.getGitBashStatus()
   },

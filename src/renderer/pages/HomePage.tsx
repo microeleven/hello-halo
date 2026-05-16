@@ -18,18 +18,20 @@ import {
 import { Header } from '../components/layout/Header'
 import { SpaceGuide } from '../components/space/SpaceGuide'
 import { CreateSpaceDialog } from '../components/space/CreateSpaceDialog'
-import { Blocks, ArrowRight, AlertCircle, SendHorizontal } from 'lucide-react'
+import { Blocks, BookOpen, Server, ArrowRight, AlertCircle, SendHorizontal, Unplug, type LucideIcon } from 'lucide-react'
 import { api } from '../api'
 import { useTranslation } from '../i18n'
 import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore } from '../stores/apps-page.store'
+import type { InstalledApp } from '../../shared/apps/app-types'
+import type { AppType } from '../../shared/apps/spec-types'
 
 export function HomePage() {
   const { t } = useTranslation()
   const { setView } = useAppStore()
   const { haloSpace, spaces, loadSpaces, setCurrentSpace, refreshCurrentSpace, updateSpace, deleteSpace } = useSpaceStore()
   const { apps, loadApps } = useAppsStore()
-  const { setInitialAppId } = useAppsPageStore()
+  const { setInitialAppId, setCurrentTab, setShowInstallDialog, openMarketplaceFilteredBy } = useAppsPageStore()
 
   // Load apps on mount for the Apps card
   useEffect(() => {
@@ -50,6 +52,7 @@ export function HomePage() {
 
   // Handle space click - no reset needed, SpacePage handles its own state
   const handleSpaceClick = (space: Space) => {
+    if (space.isMissing) return
     setCurrentSpace(space)
     refreshCurrentSpace()  // Load full space data (preferences) from backend
     setView('space')
@@ -171,55 +174,42 @@ export function HomePage() {
             </div>
           )}
 
-          {/* Apps card */}
-          <div
-            onClick={() => setView('apps')}
-            className="p-5 rounded-xl cursor-pointer border border-border hover:border-primary/40 hover:bg-secondary/50 transition-colors flex flex-col gap-3 min-h-[160px]"
-          >
-            <div className="flex items-center gap-2">
-              <Blocks className="w-5 h-5 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">{t('Apps')}</h2>
-            </div>
-
-            {apps.length === 0 ? (
-              <p className="text-xs text-muted-foreground flex-1">
-                {t('No apps yet. Create from a conversation.')}
-              </p>
-            ) : (
-              <div className="flex-1 space-y-1">
-                {apps.slice(0, 3).map(app => {
-                  const isWaiting = app.status === 'waiting_user'
-                  return (
-                    <button
-                      key={app.id}
-                      onClick={e => {
-                        e.stopPropagation()
-                        setInitialAppId(app.id)
-                        setView('apps')
-                      }}
-                      className="w-full flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                        isWaiting ? 'bg-orange-400' :
-                        app.status === 'active' ? 'bg-green-500/70' :
-                        app.status === 'error' ? 'bg-red-500' : 'border border-muted-foreground/40'
-                      }`} />
-                      <span className="text-xs text-foreground truncate flex-1 min-w-0">{app.spec.name}</span>
-                      {isWaiting && (
-                        <AlertCircle className="w-3 h-3 text-orange-400 flex-shrink-0" />
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                {t('Open')} <ArrowRight className="w-3 h-3" />
-              </span>
-            </div>
-          </div>
+          {/* Studio card — three categorized rows (digital humans / skills / MCP) */}
+          <StudioCard
+            apps={apps}
+            onOpenAutomationList={() => {
+              setCurrentTab('my-digital-humans')
+              setView('apps')
+            }}
+            onOpenSkillsList={() => {
+              setCurrentTab('my-skills')
+              setView('apps')
+            }}
+            onOpenMcpList={() => {
+              setCurrentTab('my-mcp')
+              setView('apps')
+            }}
+            onSelectApp={(appId) => {
+              setInitialAppId(appId)
+              setView('apps')
+            }}
+            onCreateAutomation={() => {
+              setCurrentTab('my-digital-humans')
+              setShowInstallDialog(true)
+              setView('apps')
+            }}
+            onBrowseSkillsMarket={() => {
+              // Set view first so AppsPage mounts and StoreView's
+              // mount-effect doesn't skip the load. The store action then
+              // atomically sets filter + tab and forces a fresh fetch.
+              setView('apps')
+              void openMarketplaceFilteredBy('skill')
+            }}
+            onBrowseMcpMarket={() => {
+              setView('apps')
+              void openMarketplaceFilteredBy('mcp')
+            }}
+          />
         </div>
 
         {/* Spaces Section */}
@@ -247,12 +237,20 @@ export function HomePage() {
               <div
                 key={`${space.id}-${i}`}
                 onClick={() => handleSpaceClick(space)}
-                className="space-card p-4 group animate-fade-in"
+                className={`space-card p-4 group animate-fade-in ${
+                  space.isMissing ? 'opacity-70 cursor-not-allowed border-dashed' : ''
+                }`}
               >
                 <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <SpaceIcon iconId={space.icon} size={20} />
                     <span className="font-medium truncate">{space.name}</span>
+                    {space.isMissing && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        <Unplug className="w-3 h-3" />
+                        {t('Unavailable')}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
                     <button
@@ -272,7 +270,9 @@ export function HomePage() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  {formatTimeAgo(space.lastActiveAt || space.updatedAt)}{t('active')}
+                  {space.isMissing
+                    ? t('Path unavailable. Reconnect the drive to open this space.')
+                    : `${formatTimeAgo(space.lastActiveAt || space.updatedAt)}${t('active')}`}
                 </p>
               </div>
             ))}
@@ -346,5 +346,172 @@ export function HomePage() {
         </div>
       )}
     </div>
+  )
+}
+
+// ──────────────────────────────────────────────
+// Studio card — three categorized rows on the home page
+// ──────────────────────────────────────────────
+
+interface StudioCardProps {
+  apps: InstalledApp[]
+  onOpenAutomationList: () => void
+  onOpenSkillsList: () => void
+  onOpenMcpList: () => void
+  /** Open AppsPage with a specific app pre-selected */
+  onSelectApp: (appId: string) => void
+  onCreateAutomation: () => void
+  onBrowseSkillsMarket: () => void
+  onBrowseMcpMarket: () => void
+}
+
+function StudioCard({
+  apps,
+  onOpenAutomationList,
+  onOpenSkillsList,
+  onOpenMcpList,
+  onSelectApp,
+  onCreateAutomation,
+  onBrowseSkillsMarket,
+  onBrowseMcpMarket,
+}: StudioCardProps) {
+  const { t } = useTranslation()
+
+  const automationApps = apps.filter(a => a.spec.type === 'automation' && a.status !== 'uninstalled')
+  const skillApps = apps.filter(a => a.spec.type === 'skill' && a.status !== 'uninstalled')
+  const mcpApps = apps.filter(a => a.spec.type === 'mcp' && a.status !== 'uninstalled')
+
+  return (
+    <div
+      onClick={onOpenAutomationList}
+      className="p-5 rounded-xl cursor-pointer border border-border hover:border-primary/40 hover:bg-secondary/50 transition-colors flex flex-col gap-3 min-h-[160px]"
+    >
+      <div className="flex items-center gap-2">
+        <Blocks className="w-5 h-5 text-muted-foreground" />
+        <h2 className="text-sm font-semibold">{t('Studio')}</h2>
+      </div>
+
+      <div className="flex-1 flex flex-col gap-2">
+        <StudioRow
+          icon={Blocks}
+          label={t('Digital Humans')}
+          type="automation"
+          apps={automationApps}
+          onOpenList={onOpenAutomationList}
+          onSelectApp={onSelectApp}
+          emptyAction={{ label: t('Create'), onAction: onCreateAutomation }}
+        />
+        <StudioRow
+          icon={BookOpen}
+          label={t('Skills')}
+          type="skill"
+          apps={skillApps}
+          onOpenList={onOpenSkillsList}
+          onSelectApp={onSelectApp}
+          emptyAction={{ label: t('Add from marketplace'), onAction: onBrowseSkillsMarket }}
+        />
+        <StudioRow
+          icon={Server}
+          label={t('MCP')}
+          type="mcp"
+          apps={mcpApps}
+          onOpenList={onOpenMcpList}
+          onSelectApp={onSelectApp}
+          emptyAction={{ label: t('Add from marketplace'), onAction: onBrowseMcpMarket }}
+        />
+      </div>
+
+      <div className="flex justify-end">
+        <span className="text-xs text-muted-foreground flex items-center gap-1">
+          {t('Open')} <ArrowRight className="w-3 h-3" />
+        </span>
+      </div>
+    </div>
+  )
+}
+
+interface StudioRowProps {
+  icon: LucideIcon
+  label: string
+  type: AppType
+  apps: InstalledApp[]
+  onOpenList: () => void
+  onSelectApp: (appId: string) => void
+  emptyAction: { label: string; onAction: () => void }
+}
+
+const PREVIEW_COUNT = 3
+
+function StudioRow({ icon: Icon, label, type, apps, onOpenList, onSelectApp, emptyAction }: StudioRowProps) {
+  const isEmpty = apps.length === 0
+  const previewApps = apps.slice(0, PREVIEW_COUNT)
+  const extraCount = Math.max(0, apps.length - PREVIEW_COUNT)
+  // Only automation apps have meaningful runtime status worth surfacing inline
+  const showStatusDot = type === 'automation'
+
+  return (
+    <div
+      onClick={e => {
+        e.stopPropagation()
+        if (isEmpty) emptyAction.onAction()
+        else onOpenList()
+      }}
+      className="flex items-center gap-2 py-1 px-1 -mx-1 rounded hover:bg-secondary/60 transition-colors cursor-pointer"
+    >
+      <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+      <span className="text-xs font-medium text-foreground flex-shrink-0">{label}</span>
+      <span className="text-[11px] text-muted-foreground flex-shrink-0 tabular-nums">{apps.length}</span>
+
+      {isEmpty ? (
+        <span className="text-xs text-muted-foreground/80 truncate flex-1 min-w-0">
+          {emptyAction.label}
+        </span>
+      ) : (
+        <span className="flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
+          {previewApps.map(app => (
+            <AppPreviewChip
+              key={app.id}
+              app={app}
+              showStatusDot={showStatusDot}
+              onSelect={() => onSelectApp(app.id)}
+            />
+          ))}
+          {extraCount > 0 && (
+            <span className="text-[11px] text-muted-foreground flex-shrink-0">+{extraCount}</span>
+          )}
+        </span>
+      )}
+    </div>
+  )
+}
+
+interface AppPreviewChipProps {
+  app: InstalledApp
+  showStatusDot: boolean
+  onSelect: () => void
+}
+
+function AppPreviewChip({ app, showStatusDot, onSelect }: AppPreviewChipProps) {
+  const isWaiting = app.status === 'waiting_user'
+  return (
+    <button
+      onClick={e => {
+        e.stopPropagation()
+        onSelect()
+      }}
+      className="flex items-center gap-1 max-w-[140px] hover:opacity-80 transition-opacity min-w-0"
+    >
+      {showStatusDot && (
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+          isWaiting ? 'bg-orange-400' :
+          app.status === 'active' ? 'bg-green-500/70' :
+          app.status === 'error' ? 'bg-red-500' : 'border border-muted-foreground/40'
+        }`} />
+      )}
+      <span className="text-xs text-foreground truncate">{app.spec.name}</span>
+      {showStatusDot && isWaiting && (
+        <AlertCircle className="w-3 h-3 text-orange-400 flex-shrink-0" />
+      )}
+    </button>
   )
 }

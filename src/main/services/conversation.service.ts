@@ -16,6 +16,7 @@
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { getSpace, touchSpaceActivity } from './space.service'
+import { getConfig } from './config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
 
@@ -108,12 +109,28 @@ export interface ConversationMeta {
   messageCount: number
   preview?: string
   starred?: boolean
+  /**
+   * Agent engine that owns this conversation. Mirrored from the full
+   * Conversation object by `toMeta()` so the conversation list can render
+   * the engine badge without loading the full conversation.
+   */
+  engineId?: 'anthropic' | 'halo' | 'codex' | null
 }
 
 interface Conversation extends ConversationMeta {
   messages: Message[]
   sessionId?: string
   version?: number  // 2 = thoughts stored separately
+  /**
+   * Agent engine that owns this conversation.
+   *
+   * Recorded on `createConversation` from the active `config.agent.sdkEngine`.
+   * Read with `?? 'anthropic'` fallback so legacy conversations (created
+   * before this field existed) keep working without migration. Used purely
+   * for UI display (EngineBadge) — engine selection at runtime is still
+   * process-bound (see resolved-sdk.ts), changing it requires a restart.
+   */
+  engineId?: 'anthropic' | 'halo' | 'codex' | null
 }
 
 // Thoughts file structure
@@ -486,6 +503,10 @@ function toMeta(conversation: Conversation): ConversationMeta {
     meta.starred = true
   }
 
+  if (conversation.engineId) {
+    meta.engineId = conversation.engineId
+  }
+
   return meta
 }
 
@@ -639,6 +660,19 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   const id = uuidv4()
   const now = new Date().toISOString()
 
+  // Stamp the conversation with the engine that created it. Cheap to read
+  // (single config field) and avoids needing a separate IPC call from
+  // the renderer when displaying the engine badge.
+  let engineId: 'anthropic' | 'halo' | 'codex' = 'anthropic'
+  try {
+    const cfg = getConfig()
+    const cfgEngine = cfg?.agent?.sdkEngine
+    if (cfgEngine === 'halo' || cfgEngine === 'codex') engineId = cfgEngine
+  } catch {
+    // getConfig() may throw if config service hasn't initialized — fall
+    // back to the documented default.
+  }
+
   const conversation: Conversation = {
     id,
     spaceId,
@@ -647,7 +681,8 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     updatedAt: now,
     messageCount: 0,
     messages: [],
-    version: CONVERSATION_FORMAT_VERSION
+    version: CONVERSATION_FORMAT_VERSION,
+    engineId,
   }
 
   const conversationsDir = getConversationsDir(spaceId)

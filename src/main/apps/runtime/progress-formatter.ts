@@ -48,10 +48,6 @@ function summarizeBrowserAction(action: string, input: Record<string, unknown>):
   switch (action) {
     // --- Active tools (15) ---
     case 'browser_navigate':
-      if (input.newTab) return truncate(input.url as string, 50) || 'Open page'
-      if (input.action === 'back') return 'Back'
-      if (input.action === 'forward') return 'Forward'
-      if (input.action === 'reload') return 'Reload'
       return truncate(input.url as string, 50) || 'Navigate'
 
     case 'browser_click':
@@ -94,6 +90,7 @@ function summarizeBrowserAction(action: string, input: Record<string, unknown>):
 
     case 'browser_tab':
       if (input.action === 'list') return 'List tabs'
+      if (input.action === 'new') return truncate(input.url as string, 50) || 'Open tab'
       if (input.action === 'close') return 'Close tab'
       return `Select tab ${input.pageIdx ?? ''}`
 

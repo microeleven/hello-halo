@@ -1,70 +1,91 @@
 /**
  * EmptyState
  *
- * Shown in the right detail pane when no app is selected,
- * or when there are no installed apps.
+ * Right-pane informational state for the AppsPage list+detail layout.
+ * Shown when no app is selected (either because the user hasn't picked one,
+ * or because the current tab has no apps at all).
  *
- * Supports two modes via `variant`:
- *   - 'automation' (default): messaging for digital humans
- *   - 'apps': messaging for MCP / Skill / Extension apps
+ * The CTAs for installing/adding apps live in AppList's prominent empty
+ * state — this component intentionally does NOT duplicate those buttons.
+ * Its sole job is to tell the user what would appear here once they pick
+ * an item from the sidebar.
+ *
+ * Variants control the per-tab copy and icon:
+ *   - 'automation' (default)
+ *   - 'skill'
+ *   - 'mcp'
  */
 
-import { Blocks, Plus, Store } from 'lucide-react'
+import { Blocks, BookOpen, Server } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+
+export type EmptyStateVariant = 'automation' | 'skill' | 'mcp'
 
 interface EmptyStateProps {
   hasApps: boolean
-  onInstall: () => void
-  /** Which tab context this empty state is shown in. Defaults to 'automation'. */
-  variant?: 'automation' | 'apps'
+  variant?: EmptyStateVariant
 }
 
-export function EmptyState({ hasApps, onInstall, variant = 'automation' }: EmptyStateProps) {
-  const { t } = useTranslation()
+interface VariantCopy {
+  selectText: string
+  selectHint: string
+  icon: LucideIcon
+  emptyTitle: string
+  emptyHint: string
+}
 
-  const isApps = variant === 'apps'
-  const selectText = isApps
-    ? t('Select an app to view details')
-    : t('Select a digital human to view details')
-  const selectHint = isApps
-    ? t('Choose an app to view details')
-    : t('Choose a digital human to view details')
-  const emptyTitle = isApps
-    ? t('No apps installed yet')
-    : t('No digital humans yet')
-  const emptyHint = isApps
-    ? t('Browse the App Store to find and install apps')
-    : t('Create your first digital human from a conversation')
-  const actionLabel = isApps
-    ? t('Browse App Store')
-    : t('Create Digital Human')
-  const ActionIcon = isApps ? Store : Plus
+function useVariantCopy(variant: EmptyStateVariant): VariantCopy {
+  const { t } = useTranslation()
+  switch (variant) {
+    case 'skill':
+      return {
+        selectText: t('Select a Skill to view details'),
+        selectHint: t('Choose a Skill to view details'),
+        icon: BookOpen,
+        emptyTitle: t('No Skills installed yet'),
+        emptyHint: t('Use the sidebar to browse the marketplace or add one manually'),
+      }
+    case 'mcp':
+      return {
+        selectText: t('Select an MCP server to view details'),
+        selectHint: t('Choose an MCP server to view details'),
+        icon: Server,
+        emptyTitle: t('No MCP servers connected yet'),
+        emptyHint: t('Use the sidebar to browse the marketplace or add one manually'),
+      }
+    case 'automation':
+    default:
+      return {
+        selectText: t('Select a digital human to view details'),
+        selectHint: t('Choose a digital human to view details'),
+        icon: Blocks,
+        emptyTitle: t('No digital humans yet'),
+        emptyHint: t('Use the sidebar to create your first digital human'),
+      }
+  }
+}
+
+export function EmptyState({ hasApps, variant = 'automation' }: EmptyStateProps) {
+  const copy = useVariantCopy(variant)
+  const Icon = copy.icon
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+    <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 sm:p-8 text-center">
       <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center">
-        <Blocks className="w-6 h-6 text-muted-foreground" />
+        <Icon className="w-6 h-6 text-muted-foreground" />
       </div>
 
       {hasApps ? (
         <div>
-          <p className="text-sm font-medium text-foreground">{selectText}</p>
-          <p className="text-xs text-muted-foreground mt-1">{selectHint}</p>
+          <p className="text-sm font-medium text-foreground">{copy.selectText}</p>
+          <p className="text-xs text-muted-foreground mt-1">{copy.selectHint}</p>
         </div>
       ) : (
-        <>
-          <div>
-            <p className="text-sm font-medium text-foreground">{emptyTitle}</p>
-            <p className="text-xs text-muted-foreground mt-1">{emptyHint}</p>
-          </div>
-          <button
-            onClick={onInstall}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-          >
-            <ActionIcon className="w-4 h-4" />
-            {actionLabel}
-          </button>
-        </>
+        <div>
+          <p className="text-sm font-medium text-foreground">{copy.emptyTitle}</p>
+          <p className="text-xs text-muted-foreground mt-1 max-w-xs">{copy.emptyHint}</p>
+        </div>
       )}
     </div>
   )

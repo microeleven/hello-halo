@@ -359,7 +359,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           createdAt: newConversation.createdAt,
           updatedAt: newConversation.updatedAt,
           messageCount: newConversation.messages?.length || 0,
-          preview: undefined
+          preview: undefined,
+          // Carry the engine stamp so EngineBadge renders immediately on the
+          // newly created item — without this the badge only appears after
+          // a meta reload (e.g. switching away and back).
+          engineId: newConversation.engineId
         }
 
         set((state) => {
@@ -1141,7 +1145,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           preview: updatedConversation.messages?.length
             ? updatedConversation.messages[updatedConversation.messages.length - 1].content.slice(0, 50)
             : undefined,
-          starred: updatedConversation.starred
+          starred: updatedConversation.starred,
+          // Carry the engine stamp through reload so EngineBadge stays
+          // visible across send-message cycles (otherwise the badge would
+          // flicker off until the user navigates away and back).
+          engineId: updatedConversation.engineId
         }
 
         // Now atomically: update cache, metadata, AND clear session state

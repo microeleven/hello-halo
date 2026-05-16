@@ -18,6 +18,9 @@ import {
   onAgentEvent,
   onAgentBroadcast
 } from '../services/agent'
+import { getEngineCapabilities, getActiveEngine } from '../services/agent/resolved-sdk'
+import { defaultCapabilitiesFor } from '../services/agent/capabilities'
+import { resolveCodexPendingQuestion } from '../services/agent/codex'
 import { getMainWindow } from '../services/window.service'
 import { broadcastToWebSocket, broadcastToAll } from '../http/websocket'
 import { analytics } from '../services/analytics/analytics.service'
@@ -149,7 +152,12 @@ export function registerAgentHandlers(): void {
     }
   })
 
-  // Answer a pending AskUserQuestion
+  // Answer a pending AskUserQuestion.
+  //
+  // We try the Codex elicitation bridge first (its pending map lives in the
+  // codex adapter), then fall back to the CC `permission-handler` map. Order
+  // matters: ids are namespaced (`codex-ask-*` vs `ask-*`) and the maps are
+  // disjoint, so this is a fast lookup with no risk of cross-resolution.
   ipcMain.handle(
     'agent:answer-question',
     async (
@@ -161,6 +169,9 @@ export function registerAgentHandlers(): void {
       }
     ) => {
       try {
+        if (resolveCodexPendingQuestion(data.id, data.answers)) {
+          return { success: true }
+        }
         const resolved = resolveQuestion(data.id, data.answers)
         if (!resolved) {
           return { success: false, error: 'No pending question found for this ID' }
@@ -172,6 +183,24 @@ export function registerAgentHandlers(): void {
       }
     }
   )
+
+  // Returns the capability descriptor for the active engine. The renderer
+  // calls this once per session and uses the returned flags to drive
+  // engine-aware UI affordances (todo state machine, thinking placeholder,
+  // diff fallback). Falls back to the declarative default if the engine
+  // module did not export its own descriptor — guarantees the renderer
+  // always gets a usable shape.
+  ipcMain.handle('agent:get-engine-capabilities', async () => {
+    try {
+      const caps = getEngineCapabilities()
+      if (caps) return { success: true, data: caps }
+      const engine = getActiveEngine() ?? 'anthropic'
+      return { success: true, data: defaultCapabilitiesFor(engine) }
+    } catch (error: unknown) {
+      const err = error as Error
+      return { success: false, error: err.message }
+    }
+  })
 
   // Inject a mid-turn message into an active session.
   // Called when user sends a message while generation is in progress (Agent Team mode).

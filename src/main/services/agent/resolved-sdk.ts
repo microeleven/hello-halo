@@ -5,7 +5,8 @@
  * ║  SINGLE ENTRY POINT FOR ALL SDK IMPORTS                          ║
  * ║                                                                   ║
  * ║  Rule: No other file may import directly from                    ║
- * ║    @anthropic-ai/claude-agent-sdk  or  @hello-halo/agent-sdk     ║
+ * ║    @anthropic-ai/claude-agent-sdk, @hello-halo/agent-sdk, or      ║
+ * ║    @openai/codex-sdk                                           ║
  * ║  All SDK access must go through this file.                       ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  *
@@ -18,8 +19,9 @@
  * │  query) are loaded dynamically at runtime via initSdk().        │
  * │  This enables true engine switching:                            │
  * │                                                                  │
- * │  • Delete CC SDK package   → system runs on Halo SDK only       │
- * │  • Delete Halo SDK package → system runs on CC SDK only         │
+ * │  • Delete CC SDK package     → system runs on Halo/Codex only   │
+ * │  • Delete Halo SDK package   → system runs on CC/Codex only     │
+ * │  • Delete Codex SDK package  → system runs on CC/Halo only      │
  * │                                                                  │
  * │  No fallback. Engine is a hard constraint. If the configured    │
  * │  SDK is not available, startup fails immediately with a clear   │
@@ -29,6 +31,7 @@
  * SDK engine values (config.agent.sdkEngine):
  *   'anthropic' (default) → @anthropic-ai/claude-agent-sdk (CC SDK)
  *   'halo'                → @hello-halo/agent-sdk (Halo SDK)
+ *   'codex'               → @openai/codex-sdk through CC protocol adapter
  *
  * Startup requirement:
  *   initSdk() must be called once during app bootstrap, before any
@@ -38,6 +41,13 @@
 
 import { getConfig } from '../config.service'
 import { installSdkLogger } from '../logging'
+import {
+  ANTHROPIC_CAPABILITIES,
+  HALO_CAPABILITIES,
+  defaultCapabilitiesFor,
+  type EngineCapabilities,
+  type EngineId,
+} from './capabilities'
 
 // ============================================
 // SDK Module Interface
@@ -45,7 +55,11 @@ import { installSdkLogger } from '../logging'
 
 /**
  * Minimal shape of what we need from either SDK.
- * Both SDKs must provide these exports with compatible runtime behavior.
+ * Both SDKs/adapters must provide these exports with compatible runtime behavior.
+ *
+ * `capabilities` is optional because the upstream CC / Halo SDK packages do
+ * not export it; we attach a default constant from `./capabilities.ts` after
+ * loading.
  */
 interface SdkModule {
   tool: (...args: any[]) => any
@@ -53,6 +67,7 @@ interface SdkModule {
   createSession?: (options: any) => Promise<any>
   unstable_v2_createSession?: (options: any) => Promise<any>
   query: (params: any) => AsyncIterable<any>
+  capabilities?: EngineCapabilities
 }
 
 // ============================================
@@ -103,12 +118,25 @@ async function doInitSdk(): Promise<void> {
     }
     const duration = (performance.now() - startTime).toFixed(1)
     console.log(`[SDK] Active engine: Halo SDK (@hello-halo/agent-sdk) [${duration}ms]`)
-  } else {
-    _sdk = await loadCcSdk()
-    _engine = 'anthropic'
-    const duration = (performance.now() - startTime).toFixed(1)
-    console.log(`[SDK] Active engine: CC SDK (@anthropic-ai/claude-agent-sdk) [${duration}ms]`)
+    return
   }
+
+  if (engine === 'codex') {
+    _sdk = await loadCodexSdk()
+    _engine = 'codex'
+    const duration = (performance.now() - startTime).toFixed(1)
+    console.log(`[SDK] Active engine: Codex SDK (@openai/codex-sdk adapter) [${duration}ms]`)
+    return
+  }
+
+  if (engine !== 'anthropic') {
+    throw new Error(`[SDK] Unknown SDK engine "${engine}". Expected "anthropic", "halo", or "codex".`)
+  }
+
+  _sdk = await loadCcSdk()
+  _engine = 'anthropic'
+  const duration = (performance.now() - startTime).toFixed(1)
+  console.log(`[SDK] Active engine: CC SDK (@anthropic-ai/claude-agent-sdk) [${duration}ms]`)
 }
 
 // ============================================
@@ -129,8 +157,29 @@ async function loadHaloSdk(): Promise<SdkModule> {
       'The configured engine is "halo" but the package is not available.\n' +
       'Solutions:\n' +
       '  1. Install @hello-halo/agent-sdk, OR\n' +
-      '  2. Change config.agent.sdkEngine to "anthropic" and restart'
+      '  2. Change config.agent.sdkEngine to "anthropic" or "codex" and restart'
     console.error(message)
+    throw new Error(message)
+  }
+}
+
+async function loadCodexSdk(): Promise<SdkModule> {
+  // Codex no longer depends on `@openai/codex-sdk`'s TypeScript surface at
+  // runtime — Halo speaks directly to the `codex app-server` binary via
+  // JSON-RPC. We still rely on `@openai/codex` (the CLI package) being
+  // installed because it ships the platform-native binary; that resolution
+  // happens inside `codex/transport/connection.ts` (`resolveBundledCodexBinary`).
+  try {
+    const { createCodexSdkModule } = await import('./codex')
+    return createCodexSdkModule() as unknown as SdkModule
+  } catch (error) {
+    const message =
+      '[SDK] Failed to load Codex adapter.\n' +
+      'The configured engine is "codex" but the adapter could not be loaded.\n' +
+      'Solutions:\n' +
+      '  1. Ensure @openai/codex (CLI binary package) is installed, OR\n' +
+      '  2. Change config.agent.sdkEngine to "anthropic" or "halo" and restart'
+    console.error(message, error)
     throw new Error(message)
   }
 }
@@ -148,7 +197,7 @@ async function loadCcSdk(): Promise<SdkModule> {
       'The configured engine is "anthropic" but the package is not available.\n' +
       'Solutions:\n' +
       '  1. Install @anthropic-ai/claude-agent-sdk, OR\n' +
-      '  2. Change config.agent.sdkEngine to "halo" and restart'
+      '  2. Change config.agent.sdkEngine to "halo" or "codex" and restart'
     console.error(message)
     throw new Error(message)
   }
@@ -258,8 +307,27 @@ async function* queryIterable(params: any): AsyncGenerator<any> {
  * Get the current SDK engine name.
  * Returns null if SDK is not initialized.
  */
-export function getActiveEngine(): string | null {
-  return _engine
+export function getActiveEngine(): EngineId | null {
+  return _engine as EngineId | null
+}
+
+/**
+ * Capability descriptor for the active engine.
+ *
+ * Returns `null` if the SDK has not been initialized (caller should treat
+ * as "loading" and re-fetch when a session is created). Falls back to the
+ * declarative default in `./capabilities.ts` if the engine module did not
+ * export its own capabilities object — this keeps every engine accessible
+ * to the renderer regardless of SDK package update timing.
+ */
+export function getEngineCapabilities(): EngineCapabilities | null {
+  if (!_sdk || !_engine) return null
+  if (_sdk.capabilities) return _sdk.capabilities
+  // Anthropic / Halo SDK packages don't export capabilities yet; supply the
+  // declarative default. Codex always has its own.
+  if (_engine === 'anthropic') return ANTHROPIC_CAPABILITIES
+  if (_engine === 'halo') return HALO_CAPABILITIES
+  return defaultCapabilitiesFor(_engine as EngineId)
 }
 
 /**

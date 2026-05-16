@@ -24,15 +24,20 @@ export function StoreView() {
   const didInitRef = useRef(false)
 
   // Load store apps and update badges on mount.
+  // Skip the load if one is already in flight — this happens when an external
+  // caller (e.g. openMarketplaceFilteredBy from Home or empty-state CTAs) has
+  // already kicked off a fetch before StoreView mounted. The in-flight call
+  // is the authoritative one; firing a second request here would double the
+  // network traffic for no benefit.
   useEffect(() => {
     if (didInitRef.current) return
     didInitRef.current = true
 
-    if (storeApps.length === 0) {
+    if (storeApps.length === 0 && !storeLoading) {
       void loadStoreApps()
     }
     void checkUpdates()
-  }, [storeApps.length, loadStoreApps, checkUpdates])
+  }, [storeApps.length, storeLoading, loadStoreApps, checkUpdates])
 
   // Error state
   if (storeError && !storeLoading && storeApps.length === 0) {

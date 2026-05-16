@@ -181,11 +181,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
   const actionMap = useMemo(() => ({
     'browser_navigate': {
       action: t('Navigate'),
-      getDescription: (input: Record<string, unknown>) =>
-        input.newTab ? `${t('Open page')} ${input.url || ''}` :
-        input.action === 'back' ? t('Back') :
-        input.action === 'forward' ? t('Forward') :
-        `${input.url || ''}`
+      getDescription: (input: Record<string, unknown>) => `${input.url || ''}`
     },
     'browser_click': {
       action: t('Click'),
@@ -241,6 +237,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
       action: t('Tab'),
       getDescription: (input: Record<string, unknown>) =>
         input.action === 'list' ? t('List tabs') :
+        input.action === 'new' ? `${t('Open page')} ${input.url || ''}` :
         input.action === 'close' ? t('Close tab') :
         t('Switch tab')
     },

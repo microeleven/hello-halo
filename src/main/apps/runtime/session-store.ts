@@ -15,6 +15,7 @@
 
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { jsonrepair } from 'jsonrepair'
 import { TRANSPARENT_TOOLS } from '../../services/agent/constants'
 
 // ============================================
@@ -232,6 +233,15 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
   let lastTextTs = ''
   let hadSubstantiveTool = false
 
+  const streamBlocks = new Map<number, {
+    type: 'text' | 'thinking' | 'tool_use'
+    content: string
+    toolName?: string
+    toolId?: string
+    initialToolInput?: Record<string, unknown>
+    thought?: ThoughtRecord
+  }>()
+
   /** Flush accumulated thoughts + lastText into one assistant Message, then reset state. */
   function flush(): void {
     if (pendingThoughts.length === 0 && !lastText) return
@@ -293,6 +303,119 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
           })
         }
       }
+      continue
+    }
+
+    // ── Token-level stream events (LEGACY Codex adapter persistence) ──
+    //
+    // BACKWARD COMPATIBILITY ONLY. As of the engine-protocol unification
+    // (codex/event-normalizer.ts → aggregateBlock), the Codex adapter emits
+    // top-level `type: 'assistant'`/`type: 'user'` envelopes alongside its
+    // stream_events, and `app-chat.ts` no longer persists stream_events to
+    // JSONL for either engine. New runs therefore reconstruct entirely from
+    // the assistant/user branches above.
+    //
+    // This branch handles JSONL files written BEFORE that change, where
+    // Codex runs persisted stream_events as their sole record of assistant
+    // content. Removing it would break "View process" replay for those
+    // historical runs. Leave it; it is a no-op for new files.
+    if (event.type === 'stream_event') {
+      const streamEvent = event.event as any
+      if (!streamEvent) continue
+      const index = streamEvent.index ?? 0
+
+      if (streamEvent.type === 'content_block_start') {
+        const block = streamEvent.content_block
+        if (block?.type === 'text') {
+          streamBlocks.set(index, { type: 'text', content: block.text || '' })
+        } else if (block?.type === 'thinking') {
+          const thought: ThoughtRecord = {
+            id: generateThoughtId(),
+            type: 'thinking',
+            content: block.thinking || '',
+            timestamp: ts,
+          }
+          pendingThoughts.push(thought)
+          lastThoughtTs = ts
+          streamBlocks.set(index, { type: 'thinking', content: thought.content, thought })
+        } else if (block?.type === 'tool_use') {
+          const thought: ThoughtRecord = {
+            id: generateThoughtId(),
+            type: 'tool_use',
+            content: '',
+            timestamp: ts,
+            toolName: block.name || '',
+            toolInput: block.input || {},
+          }
+          pendingThoughts.push(thought)
+          lastThoughtTs = ts
+          if (!TRANSPARENT_TOOLS.has(block.name || '')) {
+            hadSubstantiveTool = true
+          }
+          if (block.id) {
+            toolUseMap.set(block.id, thought)
+          }
+          streamBlocks.set(index, {
+            type: 'tool_use',
+            content: '',
+            toolName: block.name || '',
+            toolId: block.id,
+            initialToolInput: block.input || {},
+            thought,
+          })
+        }
+        continue
+      }
+
+      if (streamEvent.type === 'content_block_delta') {
+        const blockState = streamBlocks.get(index)
+        if (!blockState) continue
+        const delta = streamEvent.delta
+        if (blockState.type === 'text' && delta?.type === 'text_delta') {
+          blockState.content += delta.text || ''
+        } else if (blockState.type === 'thinking' && delta?.type === 'thinking_delta') {
+          blockState.content += delta.thinking || ''
+          if (blockState.thought) blockState.thought.content = blockState.content
+        } else if (blockState.type === 'tool_use' && delta?.type === 'input_json_delta') {
+          blockState.content += delta.partial_json || ''
+        }
+        continue
+      }
+
+      if (streamEvent.type === 'content_block_stop') {
+        const blockState = streamBlocks.get(index)
+        if (!blockState) continue
+
+        if (blockState.type === 'text' && blockState.content) {
+          if (hadSubstantiveTool) {
+            if (lastText) {
+              pendingThoughts.push({
+                id: generateThoughtId(),
+                type: 'text',
+                content: lastText,
+                timestamp: lastTextTs,
+              })
+            }
+            lastText = blockState.content
+            lastTextTs = ts
+            hadSubstantiveTool = false
+          } else if (lastText) {
+            lastText += '\n\n' + blockState.content
+            lastTextTs = ts
+          } else {
+            lastText = blockState.content
+            lastTextTs = ts
+          }
+        } else if (blockState.type === 'tool_use' && blockState.thought) {
+          blockState.thought.toolInput = blockState.content
+            ? parseToolInput(blockState.content)
+            : (blockState.initialToolInput || {})
+        }
+
+        streamBlocks.delete(index)
+        continue
+      }
+
       continue
     }
 
@@ -499,4 +622,16 @@ function extractToolResults(content: unknown): Array<{ toolUseId: string; output
           : JSON.stringify(b.content ?? ''),
       isError: !!b.is_error,
     }))
+}
+
+function parseToolInput(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    try {
+      return JSON.parse(jsonrepair(raw))
+    } catch {
+      return { raw }
+    }
+  }
 }

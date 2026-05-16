@@ -18,19 +18,26 @@ export {
   convertRequest as convertRequestToResponses
 } from './request/anthropic-to-openai-responses'
 
-// Response converters
+// Response converters.
+//
+// The `convertChatResponseToAnthropic` / `convertResponsesResponseToAnthropic`
+// aliases live in `./response/index.ts` — re-exporting them here from the
+// leaf modules used to compile under esbuild's permissive tree-shaker but
+// crashes any strict ESM consumer (Node.js native loader, tsx, ts-node ESM)
+// with `SyntaxError: ... does not provide an export named ...`. Sourcing
+// every alias from the response barrel keeps every consumer working.
 export {
   convertOpenAIChatToAnthropic,
   convertChatResponseToAnthropic,
   createAnthropicErrorResponse,
   mapFinishReasonToStopReason
-} from './response/openai-chat-to-anthropic'
+} from './response'
 
 export {
   convertOpenAIResponsesToAnthropic,
   convertResponsesResponseToAnthropic,
   mapStatusToStopReason
-} from './response/openai-responses-to-anthropic'
+} from './response'
 
 // Content block converters
 export * from './content-blocks'
