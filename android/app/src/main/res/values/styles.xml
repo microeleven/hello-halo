@@ -12,8 +12,8 @@
 
          The transparent status/navigation bar items below enable edge-to-edge:
          the WebView paints behind both system bars, and `MainActivity` writes
-         the real status bar height into `--safe-area-inset-top` so layouts
-         using `var(--sat)` push content below it. -->
+         the real status bar height into the CSS variable `safe-area-inset-top`
+         so layouts using `var(safe-area-inset-top)` push content below it. -->
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
