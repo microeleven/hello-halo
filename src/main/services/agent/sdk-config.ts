@@ -17,6 +17,13 @@ import { buildSystemPrompt, buildSystemPromptWithAIBrowser, DEFAULT_ALLOWED_TOOL
 import { AI_BROWSER_SYSTEM_PROMPT } from '../ai-browser'
 import { createCanUseTool } from './permission-handler'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../shared/constants/disabled-tools'
+import {
+  MAX_OUTPUT_TOKENS_HARD_MIN,
+  MAX_OUTPUT_TOKENS_HARD_CAP,
+  RECOMMENDED_MIN_MAX_OUTPUT_TOKENS,
+  CONTEXT_WINDOW_HARD_MIN,
+  CONTEXT_WINDOW_HARD_CAP,
+} from '../../../shared/constants/model-runtime-limits'
 
 // ============================================
 // Configuration
@@ -86,34 +93,36 @@ export interface SdkEnvParams {
 // ============================================
 
 /**
- * Clamp ranges for CC SDK env-var injection.
- *
- * Rationale (see services/compact/autoCompact.ts in the bundled CLI):
- *   - effectiveContextWindow = contextWindow - min(maxOutputTokens, 20_000)
- *   - autoCompactThreshold   = effectiveContextWindow - 13_000
- *
- * If `maxOutputTokens` drops below MAX_OUTPUT_TOKENS_FOR_SUMMARY (20_000),
- * the compact-summary call itself gets truncated mid-generation — that's
- * why the lower bound here is 20_000, not zero.
- *
- * If `contextWindow` drops near or below 33_000, the auto-compact threshold
- * crosses zero and compaction fires immediately on every turn. 40_000 is
- * the smallest value that keeps a usable window after both buffers.
- *
- * Upper bounds are intentionally generous: CC itself caps maxOutputTokens at
- * the model's own upperLimit (services/api/claude.ts:getMaxOutputTokensForModel),
- * and CC only ever SHRINKS the context window via Math.min with the env value
- * — passing a higher number than the model supports is a no-op. So we don't
- * try to second-guess the model registry here.
+ * Bounds for CC env-var injection. See `shared/constants/model-runtime-limits.ts`
+ * for the rationale split between hard floors (correctness) and the recommended
+ * floor for `maxOutputTokens` (quality — surfaced as WARN + UI hint, not clamped).
  */
-const MAX_OUTPUT_TOKENS_MIN = 20_000   // matches MAX_OUTPUT_TOKENS_FOR_SUMMARY in CC
-const MAX_OUTPUT_TOKENS_MAX = 1_000_000
-const CONTEXT_WINDOW_MIN = 40_000      // headroom for output (20K) + compact buffer (13K) + slack (7K)
-const CONTEXT_WINDOW_MAX = 2_000_000   // future-proof for >1M models
+
+// CC's MODEL_CONTEXT_WINDOW_DEFAULT for unknown models. CC's `[1m]` suffix
+// is the documented opt-in to raise the intrinsic to 1M.
+const CC_INTRINSIC_DEFAULT_CONTEXT = 200_000
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
   return Math.max(min, Math.min(max, Math.round(value)))
+}
+
+/**
+ * Append CC's `[1m]` suffix to the SDK-facing model id so `has1mContext`
+ * unlocks the 1M intrinsic. Only decorates the SDK-facing copy — the wire
+ * id encoded into the API key stays clean so non-Anthropic upstreams never
+ * see the synthetic suffix. Threshold is strict `>` to avoid opening
+ * unaudited CC `[1m]` branches for models that don't need them.
+ */
+export function applyCC1mContextUnlock(
+  sdkModel: string,
+  capabilities: ResolvedModelCapabilities | undefined
+): string {
+  if (!sdkModel) return sdkModel
+  if (/\[1m\]$/i.test(sdkModel)) return sdkModel
+  if (!capabilities || !Number.isFinite(capabilities.contextWindow)) return sdkModel
+  if (capabilities.contextWindow <= CC_INTRINSIC_DEFAULT_CONTEXT) return sdkModel
+  return `${sdkModel}[1m]`
 }
 
 /**
@@ -129,18 +138,34 @@ export function resolveSdkRuntimeLimits(
 ): { maxOutputTokens?: number; autoCompactWindow?: number } {
   if (!capabilities) return {}
   const out: { maxOutputTokens?: number; autoCompactWindow?: number } = {}
+
+  // maxOutputTokens: pass through, only sanity-bounded. Below the recommended
+  // floor we log a WARN so users who intentionally go low see why
+  // auto-compact later fails — but we no longer silently rewrite their value
+  // (the UI shows the same warning so the choice is explicit).
   if (Number.isFinite(capabilities.maxOutputTokens) && capabilities.maxOutputTokens > 0) {
-    out.maxOutputTokens = clampInt(
+    const value = clampInt(
       capabilities.maxOutputTokens,
-      MAX_OUTPUT_TOKENS_MIN,
-      MAX_OUTPUT_TOKENS_MAX
+      MAX_OUTPUT_TOKENS_HARD_MIN,
+      MAX_OUTPUT_TOKENS_HARD_CAP
     )
+    out.maxOutputTokens = value
+    if (value < RECOMMENDED_MIN_MAX_OUTPUT_TOKENS) {
+      console.warn(
+        `[SDK Config] maxOutputTokens=${value} is below recommended ${RECOMMENDED_MIN_MAX_OUTPUT_TOKENS}. ` +
+        `CC auto-compact summary may truncate (summary p99.99 ≈ 17_387 tokens).`
+      )
+    }
   }
+
+  // contextWindow keeps a hard floor: below ~33K the auto-compact threshold
+  // goes negative and compaction fires every turn — that's a correctness
+  // failure, not a quality tradeoff, so silent clamp is justified here.
   if (Number.isFinite(capabilities.contextWindow) && capabilities.contextWindow > 0) {
     out.autoCompactWindow = clampInt(
       capabilities.contextWindow,
-      CONTEXT_WINDOW_MIN,
-      CONTEXT_WINDOW_MAX
+      CONTEXT_WINDOW_HARD_MIN,
+      CONTEXT_WINDOW_HARD_CAP
     )
   }
   return out
@@ -252,19 +277,16 @@ export async function resolveCredentialsForSdk(
     const apiType = credentials.apiType
       || (credentials.provider === 'oauth' ? 'chat_completions' : inferOpenAIWireApi(credentials.baseUrl))
 
+    // Encode with real wire id BEFORE sdkModel decoration so [1m] never leaks upstream.
     anthropicApiKey = encodeBackendConfig(credentialsToBackendConfig(credentials, { apiType }))
 
-    // For Claude OAuth (anthropic_passthrough) the upstream is the real
-    // Anthropic API, so we keep the user's actual model id — including any
-    // [1m] suffix — so the SDK's internal context-window detection sizes
-    // the local window to 1M and avoids premature auto-compact at 200K.
-    // The router strips [1m] before forwarding the body to /v1/messages.
-    //
-    // For other non-Anthropic providers (OpenAI-compat backends), pass the
-    // user's real model through. The router translates the wire format;
-    // the SDK no longer requires a fake Claude model name.
-
     console.log(`[SDK Config] ${credentials.provider} provider: routing via ${anthropicBaseUrl}, apiType=${apiType}, sdkModel=${sdkModel}`)
+  }
+
+  const decoratedSdkModel = applyCC1mContextUnlock(sdkModel, credentials.capabilities)
+  if (decoratedSdkModel !== sdkModel) {
+    console.log(`[SDK Config] CC 1M context unlock: sdkModel "${sdkModel}" → "${decoratedSdkModel}" (contextWindow=${credentials.capabilities?.contextWindow})`)
+    sdkModel = decoratedSdkModel
   }
 
   return {
@@ -286,16 +308,24 @@ async function resolveAnthropicPassthrough(
   const router = await ensureOpenAICompatRouter({ debug: false })
   const configUrl = credentials.baseUrl.replace(/\/+$/, '') + '/v1/messages'
 
+  // Encode with real wire id; router strips any [1m] suffix before forwarding.
   const anthropicApiKey = encodeBackendConfig(
     credentialsToBackendConfig(credentials, { url: configUrl, apiType: 'anthropic_passthrough' })
   )
+
+  let sdkModel = credentials.model || 'claude-opus-4-5-20251101'
+  const decoratedSdkModel = applyCC1mContextUnlock(sdkModel, credentials.capabilities)
+  if (decoratedSdkModel !== sdkModel) {
+    console.log(`[SDK Config] CC 1M context unlock (anthropic passthrough): sdkModel "${sdkModel}" → "${decoratedSdkModel}" (contextWindow=${credentials.capabilities?.contextWindow})`)
+    sdkModel = decoratedSdkModel
+  }
 
   console.log(`[SDK Config] Anthropic passthrough: routing via ${router.baseUrl}`)
 
   return {
     anthropicBaseUrl: router.baseUrl,
     anthropicApiKey,
-    sdkModel: credentials.model || 'claude-opus-4-5-20251101',
+    sdkModel,
     displayModel: credentials.displayModel || credentials.model,
     capabilities: credentials.capabilities,
   }

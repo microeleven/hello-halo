@@ -158,11 +158,20 @@ export async function enableRemoteAccess(
     }
   })
 
+  // Push status so the renderer reflects the running server even when the
+  // service starts outside a user-initiated IPC call (e.g. idle auto-restore).
+  if (statusCallback) {
+    statusCallback(getRemoteAccessStatus())
+  }
+
   return getRemoteAccessStatus()
 }
 
 /**
  * Disable remote access (stop HTTP server and tunnel)
+ *
+ * User-initiated disable: persists `enabled: false` so the service does NOT
+ * auto-restore on next start. For app shutdown use shutdownRemoteAccess().
  */
 export async function disableRemoteAccess(): Promise<void> {
   await stopTunnel()
@@ -177,6 +186,18 @@ export async function disableRemoteAccess(): Promise<void> {
       enabled: false
     }
   })
+}
+
+/**
+ * Stop remote access resources during app shutdown.
+ *
+ * Releases the tunnel and HTTP port without mutating config. The persisted
+ * `enabled` flag must survive shutdown so the next start's idle task can
+ * auto-restore the service for paired devices.
+ */
+export async function shutdownRemoteAccess(): Promise<void> {
+  await stopTunnel()
+  stopHttpServer()
 }
 
 /**

@@ -2,25 +2,29 @@
  * Unit tests for sdk-config.resolveSdkRuntimeLimits — the pure resolver that
  * turns Halo's resolved model capabilities into CC subprocess env values.
  *
- * Production scenario this guards against:
- *   - Issue #112: chat / digital humans hit "response exceeded 32000 output
- *     token maximum" because CC's default max_tokens was never overridden by
- *     the user-configured ModelConfigPanel values.
- *   - The Model Config UI (contextWindow + maxOutputTokens) had no consumer
- *     on the agent side; this resolver is the single point that maps it onto
- *     CC's CLAUDE_CODE_MAX_OUTPUT_TOKENS / CLAUDE_CODE_AUTO_COMPACT_WINDOW.
- *
- * Clamp lower bounds matter operationally:
- *   - maxOutputTokens < 20_000 truncates CC's own compact summary call
- *     (p99.99 ≈ 17_387 tokens per CC source).
- *   - contextWindow < 40_000 pushes the autoCompactThreshold negative and
- *     causes compaction to fire every turn.
+ * Behavior split (see shared/constants/model-runtime-limits.ts):
+ *   - maxOutputTokens: hard floor = 1 (only catches 0/negative/NaN). Below the
+ *     recommended floor (20_000) we WARN but pass the user's value through.
+ *     The UI shows the same warning so going low is an explicit choice, not a
+ *     silent override.
+ *   - contextWindow: hard floor (40_000). Lower makes auto-compact fire every
+ *     turn — a correctness failure, so still clamped silently.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { resolveSdkRuntimeLimits } from '../../../../src/main/services/agent/sdk-config'
 
 describe('resolveSdkRuntimeLimits', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+  })
+
   it('returns empty object when capabilities are undefined', () => {
     expect(resolveSdkRuntimeLimits(undefined)).toEqual({})
   })
@@ -29,16 +33,25 @@ describe('resolveSdkRuntimeLimits', () => {
     expect(
       resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 200_000 })
     ).toEqual({ maxOutputTokens: 64_000, autoCompactWindow: 200_000 })
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
-  it('clamps maxOutputTokens up to MAX_OUTPUT_TOKENS_MIN to protect compact summary', () => {
-    // 8192 would truncate CC's compact summary mid-generation.
+  it('passes low maxOutputTokens through and logs a WARN (no silent rewrite)', () => {
+    // 8192 stays as 8192. The user explicitly chose this; the UI surfaces the
+    // same warning so the consequence is visible.
     expect(
       resolveSdkRuntimeLimits({ maxOutputTokens: 8_192, contextWindow: 200_000 })
-    ).toMatchObject({ maxOutputTokens: 20_000 })
+    ).toEqual({ maxOutputTokens: 8_192, autoCompactWindow: 200_000 })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy.mock.calls[0][0]).toContain('below recommended')
   })
 
-  it('clamps contextWindow up to CONTEXT_WINDOW_MIN to keep autoCompactThreshold positive', () => {
+  it('does NOT warn for values at or above the recommended floor', () => {
+    resolveSdkRuntimeLimits({ maxOutputTokens: 20_000, contextWindow: 200_000 })
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('clamps contextWindow up to CONTEXT_WINDOW_HARD_MIN to keep autoCompactThreshold positive', () => {
     // A 32K window would make autoCompactThreshold negative once the
     // 20K summary reserve + 13K compact buffer is subtracted.
     expect(
@@ -46,13 +59,13 @@ describe('resolveSdkRuntimeLimits', () => {
     ).toMatchObject({ autoCompactWindow: 40_000 })
   })
 
-  it('caps maxOutputTokens at MAX_OUTPUT_TOKENS_MAX (1M)', () => {
+  it('caps maxOutputTokens at MAX_OUTPUT_TOKENS_HARD_CAP (1M)', () => {
     expect(
       resolveSdkRuntimeLimits({ maxOutputTokens: 5_000_000, contextWindow: 200_000 })
     ).toMatchObject({ maxOutputTokens: 1_000_000 })
   })
 
-  it('caps contextWindow at CONTEXT_WINDOW_MAX (2M)', () => {
+  it('caps contextWindow at CONTEXT_WINDOW_HARD_CAP (2M)', () => {
     expect(
       resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 10_000_000 })
     ).toMatchObject({ autoCompactWindow: 2_000_000 })
@@ -83,7 +96,6 @@ describe('resolveSdkRuntimeLimits', () => {
   })
 
   it('matches Claude Sonnet 4.6 preset (200K context, 64K output)', () => {
-    // Mirrors model-capabilities.json claude-sonnet- pattern.
     expect(
       resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 200_000 })
     ).toEqual({ maxOutputTokens: 64_000, autoCompactWindow: 200_000 })

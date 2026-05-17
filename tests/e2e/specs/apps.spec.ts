@@ -14,47 +14,51 @@ test.describe('Apps Page', () => {
   test('renders with correct tab bar', async ({ window }) => {
     await navigateToApps(window)
 
-    // All three tabs should be visible (supports EN/CN)
+    // Tab bar has four tabs (supports EN/CN). Tabs were restructured:
+    // "My Apps" split into "My Skills" + "My MCP"; "App Store" renamed to "Marketplace".
     const digitalHumansTab = await window.$('text=/My Digital Humans|我的数字人/i')
     expect(digitalHumansTab).toBeTruthy()
 
-    const myAppsTab = await window.$('text=/My Apps|我的应用/i')
-    expect(myAppsTab).toBeTruthy()
+    const skillsTab = await window.$('text=/My Skills|我的技能/i')
+    expect(skillsTab).toBeTruthy()
 
-    const storeTab = await window.$('text=/App Store|应用商店/i')
+    const mcpTab = await window.$('text=/My MCP|我的MCP/i')
+    expect(mcpTab).toBeTruthy()
+
+    const storeTab = await window.$('text=/Marketplace|市场/i')
     expect(storeTab).toBeTruthy()
 
     await window.screenshot({ path: 'tests/e2e/results/apps-tabs.png' })
   })
 
-  test('can switch to My Apps tab', async ({ window }) => {
+  test('can switch to My Skills tab', async ({ window }) => {
     await navigateToApps(window)
 
-    // Click My Apps tab
-    const myAppsTab = await window.waitForSelector(
-      'button:has-text("My Apps"), button:has-text("我的应用")',
+    // Click My Skills tab (replaces the old "My Apps" tab after the split)
+    const skillsTab = await window.waitForSelector(
+      'button:has-text("My Skills"), button:has-text("我的技能")',
       { timeout: 5000 }
     )
-    await myAppsTab.click()
+    await skillsTab.click()
     await window.waitForTimeout(300)
 
     // Tab should be active (has active styling)
-    await window.screenshot({ path: 'tests/e2e/results/apps-my-apps-tab.png' })
+    await window.screenshot({ path: 'tests/e2e/results/apps-my-skills-tab.png' })
   })
 
-  test('can switch to App Store tab', async ({ window }) => {
+  test('can switch to Marketplace tab', async ({ window }) => {
     await navigateToApps(window)
 
-    // Click App Store tab
+    // Click Marketplace tab (renamed from "App Store")
     const storeTab = await window.waitForSelector(
-      'button:has-text("App Store"), button:has-text("应用商店")',
+      'button:has-text("Marketplace"), button:has-text("市场")',
       { timeout: 5000 }
     )
     await storeTab.click()
     await window.waitForTimeout(500)
 
     // StoreView should render
-    await window.screenshot({ path: 'tests/e2e/results/apps-store-tab.png' })
+    await window.screenshot({ path: 'tests/e2e/results/apps-marketplace-tab.png' })
   })
 
   test('My Digital Humans shows empty state or app list', async ({ window }) => {
@@ -111,9 +115,9 @@ test.describe('Apps Page - Store Tab', () => {
   test('app store shows content', async ({ window }) => {
     await navigateToApps(window)
 
-    // Switch to App Store tab
+    // Switch to Marketplace tab (renamed from "App Store")
     const storeTab = await window.waitForSelector(
-      'button:has-text("App Store"), button:has-text("应用商店")',
+      'button:has-text("Marketplace"), button:has-text("市场")',
       { timeout: 5000 }
     )
     await storeTab.click()

@@ -5,4 +5,5 @@
  */
 
 export * from './providers'
+export * from './model-runtime-limits'
 export { supportsVision } from './model-capabilities'

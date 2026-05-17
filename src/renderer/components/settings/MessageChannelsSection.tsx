@@ -872,7 +872,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
               value={ownersDisplay}
               onChange={(e) => handleOwnersChange(e.target.value)}
               onBlur={handleOwnersBlur}
-              placeholder={permissionDefaults?.ownerIdHint || t('e.g. zhangsan, lisi (comma separated)')}
+              placeholder={permissionDefaults?.ownerIdHint || t('Fill in your own user ID. Ask the bot "what is my user ID" to get it.')}
               rows={2}
               className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />

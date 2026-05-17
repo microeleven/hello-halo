@@ -873,6 +873,22 @@ function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
   return migrateAiSourcesToV2(parsed)
 }
 
+// Stable serialization of modelOverrides for the session-rebuild signature.
+// Sorted by id so object-key insertion order doesn't churn sessions.
+function serializeModelOverridesForSignature(
+  overrides?: AISource['modelOverrides']
+): string {
+  if (!overrides) return ''
+  const ids = Object.keys(overrides).sort()
+  if (ids.length === 0) return ''
+  return ids
+    .map(id => {
+      const v = overrides[id] || {}
+      return `${id}:${v.maxOutputTokens ?? ''}:${v.contextWindow ?? ''}`
+    })
+    .join(';')
+}
+
 function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
   if (!aiSources) return ''
 
@@ -881,19 +897,18 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
     const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
     if (!currentSource) return ''
 
-    // Model is included in signature: changing model triggers session rebuild.
-    // The model is encoded into ANTHROPIC_API_KEY env var at session creation time
-    // (for all providers when routed through the OpenAI compat router), so dynamic
-    // switching via setModel() is not effective. Session rebuild is the reliable path.
-    // Performance note: if zero-latency model switching becomes needed, consider
-    // a router-side model override (Option B) instead of session rebuild.
+    // modelOverrides are baked into CC subprocess env at startup — include in
+    // signature so panel edits trigger session rebuild instead of staying stale.
+    const overridesSig = serializeModelOverridesForSignature(currentSource.modelOverrides)
+
     if (currentSource.authType === 'api-key') {
       return [
         'api-key',
         currentSource.provider || '',
         currentSource.apiUrl || '',
         currentSource.apiKey || '',
-        currentSource.model || ''
+        currentSource.model || '',
+        overridesSig
       ].join('|')
     }
 
@@ -904,7 +919,8 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
       currentSource.accessToken || '',
       currentSource.refreshToken || '',
       currentSource.tokenExpires || '',
-      currentSource.model || ''
+      currentSource.model || '',
+      overridesSig
     ].join('|')
   }
 

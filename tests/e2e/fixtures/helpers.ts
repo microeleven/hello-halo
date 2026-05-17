@@ -53,14 +53,15 @@ export async function navigateToSettings(window: Page) {
 }
 
 /**
- * Navigate from Home Page to Apps Page by clicking the Apps card.
+ * Navigate from Home Page to Apps Page by clicking the Studio card.
+ * Card heading was renamed from "Apps" to "Studio" (zh: 工坊).
  */
 export async function navigateToApps(window: Page) {
   await waitForHomePage(window)
 
-  // Click the Apps card (has "Apps" heading)
+  // Click the Studio/Apps card heading (supports EN/CN, legacy "Apps")
   const appsCard = await window.waitForSelector(
-    'text=/^Apps$/i',
+    'text=/^Studio$|^工坊$|^Apps$/i',
     { timeout: 10000 }
   )
   await appsCard.click()

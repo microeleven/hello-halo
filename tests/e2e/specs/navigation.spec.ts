@@ -16,8 +16,8 @@ test.describe('Home Page', () => {
     const haloCard = await window.$('[data-onboarding="halo-space"]')
     expect(haloCard).toBeTruthy()
 
-    // Apps card should be visible (has "Apps" heading)
-    const appsText = await window.$('text=/^Apps$/i')
+    // Studio card should be visible (heading was renamed from "Apps" to "Studio"; zh: 工坊)
+    const appsText = await window.$('text=/^Studio$|^工坊$|^Apps$/i')
     expect(appsText).toBeTruthy()
 
     // "Dedicated Spaces" section should be visible (supports EN/CN)
@@ -70,13 +70,15 @@ test.describe('Page Navigation', () => {
     await navigateToApps(window)
 
     // Tab bar should be visible with tab options
+    // Tabs were restructured: "My Apps" split into "My Skills" + "My MCP";
+    // "App Store" renamed to "Marketplace".
     const tabBar = await window.$('text=/My Digital Humans|我的数字人/i')
     expect(tabBar).toBeTruthy()
 
-    const appsTab = await window.$('text=/My Apps|我的应用/i')
-    expect(appsTab).toBeTruthy()
+    const skillsTab = await window.$('text=/My Skills|我的技能/i')
+    expect(skillsTab).toBeTruthy()
 
-    const storeTab = await window.$('text=/App Store|应用商店/i')
+    const storeTab = await window.$('text=/Marketplace|市场/i')
     expect(storeTab).toBeTruthy()
 
     await window.screenshot({ path: 'tests/e2e/results/nav-apps-page.png' })

@@ -18,6 +18,10 @@ import { ChevronDown, ChevronRight, RotateCcw, Info, AlertTriangle, Loader2 } fr
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { ModelCapability, ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
+import {
+  MAX_OUTPUT_TOKENS_HARD_MIN,
+  RECOMMENDED_MIN_MAX_OUTPUT_TOKENS,
+} from '../../../shared/constants/model-runtime-limits'
 
 // ── Default values used when no preset exists ──────────────────────────────
 const DEFAULT_CAPABILITY: ModelCapability = {
@@ -258,8 +262,6 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
-                      min={1}
-                      step={1024}
                       value={effective.contextWindow}
                       onChange={e => handleNumberField('contextWindow', e.target.value)}
                       className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
@@ -277,8 +279,7 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
-                      min={1}
-                      step={256}
+                      min={MAX_OUTPUT_TOKENS_HARD_MIN}
                       value={effective.maxOutputTokens}
                       onChange={e => handleNumberField('maxOutputTokens', e.target.value)}
                       className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
@@ -286,6 +287,18 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
                     />
                     <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
                   </div>
+                  {/* Quality warning — passed through to the SDK as-is, but the
+                      compact-summary call may truncate. Mirrors the WARN in
+                      sdk-config.resolveSdkRuntimeLimits. */}
+                  {effective.maxOutputTokens > 0
+                    && effective.maxOutputTokens < RECOMMENDED_MIN_MAX_OUTPUT_TOKENS && (
+                      <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                        <span>
+                          {t('Values below 20,000 may cause Claude Code\u2019s auto-compact summary to truncate (summary p99.99 ≈ 17,387 tokens).')}
+                        </span>
+                      </div>
+                    )}
                 </div>
               </div>
 

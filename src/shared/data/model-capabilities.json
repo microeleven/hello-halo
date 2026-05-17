@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-04-25",
+  "updatedAt": "2026-05-17",
   "patterns": {
     "claude-opus-": {
       "displayName": "Claude Opus",
@@ -420,10 +420,34 @@
       "vision": false,
       "thinking": true
     },
+    "claude-opus-4-7": {
+      "displayName": "Claude Opus 4.7",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-opus-4-7[1m]": {
+      "displayName": "Claude Opus 4.7 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
     "claude-opus-4-6": {
       "displayName": "Claude Opus 4.6",
       "provider": "anthropic",
       "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-opus-4-6[1m]": {
+      "displayName": "Claude Opus 4.6 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
       "thinking": true
@@ -440,6 +464,14 @@
       "displayName": "Claude Sonnet 4.6",
       "provider": "anthropic",
       "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-sonnet-4-6[1m]": {
+      "displayName": "Claude Sonnet 4.6 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
       "thinking": true

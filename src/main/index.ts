@@ -189,7 +189,7 @@ import {
 } from './bootstrap'
 import { initializeApp } from './services/config.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
-import { disableRemoteAccess } from './services/remote.service'
+import { shutdownRemoteAccess } from './services/remote.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
 import { manualCheckForUpdates } from './services/updater.service'
 import { initAnalytics } from './services/analytics'
@@ -535,7 +535,7 @@ async function shutdownServices(): Promise<void> {
   // Shutdown health system first (marks clean exit)
   shutdownHealthSystem()
 
-  await disableRemoteAccess().catch(console.error)
+  await shutdownRemoteAccess().catch(console.error)
   await stopOpenAICompatRouter().catch(console.error)
   await cleanupExtendedServices().catch(console.error)
 }

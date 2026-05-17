@@ -59,7 +59,7 @@ test.describe('SkillHub App Store Integration', () => {
 
     // Click App Store tab
     const storeTab = await window.waitForSelector(
-      'button:has-text("App Store"), button:has-text("应用商店")',
+      'button:has-text("Marketplace"), button:has-text("市场")',
       { timeout: 10000 }
     )
     await storeTab.click()
@@ -79,7 +79,7 @@ test.describe('SkillHub App Store Integration', () => {
 
     // Click App Store tab
     const storeTab = await window.waitForSelector(
-      'button:has-text("App Store"), button:has-text("应用商店")',
+      'button:has-text("Marketplace"), button:has-text("市场")',
       { timeout: 10000 }
     )
     await storeTab.click()
@@ -111,7 +111,7 @@ test.describe('SkillHub App Store Integration', () => {
 
     // Click App Store tab
     const storeTab = await window.waitForSelector(
-      'button:has-text("App Store"), button:has-text("应用商店")',
+      'button:has-text("Marketplace"), button:has-text("市场")',
       { timeout: 10000 }
     )
     await storeTab.click()

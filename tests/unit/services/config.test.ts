@@ -15,7 +15,8 @@ import {
   saveConfig,
   getHaloDir,
   getConfigPath,
-  initializeApp
+  initializeApp,
+  getCredentialsGeneration
 } from '../../../src/main/services/config.service'
 
 describe('Config Service', () => {
@@ -142,6 +143,122 @@ describe('Config Service', () => {
 
       const config = getConfig()
       expect(config.mcpServers).toEqual({ server2: { command: 'cmd2' } })
+    })
+  })
+
+  // Guards the session-rebuild signal: anything baked into the CC subprocess at
+  // startup (API key, model, modelOverrides) must influence the signature so
+  // ModelConfigPanel edits take effect without an app restart.
+  describe('credentials generation invalidation', () => {
+    const sourceId = '11111111-1111-1111-1111-111111111111'
+
+    function makeApiKeySource(extra: Record<string, unknown> = {}) {
+      return {
+        version: 2 as const,
+        currentId: sourceId,
+        sources: [
+          {
+            id: sourceId,
+            name: 'Test',
+            provider: 'custom' as const,
+            authType: 'api-key' as const,
+            apiUrl: 'https://example.com',
+            apiKey: 'sk-test',
+            model: 'deepseek-v4-flash',
+            availableModels: [{ id: 'deepseek-v4-flash', name: 'DeepSeek v4 Flash' }],
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ...extra
+          }
+        ]
+      }
+    }
+
+    beforeEach(async () => {
+      await initializeApp()
+      // Establish baseline source so subsequent saves are diffs, not first-set.
+      saveConfig({ aiSources: makeApiKeySource() } as any)
+    })
+
+    it('increments generation when model id changes', () => {
+      const before = getCredentialsGeneration()
+      saveConfig({ aiSources: makeApiKeySource({ model: 'deepseek-chat' }) } as any)
+      expect(getCredentialsGeneration()).toBe(before + 1)
+    })
+
+    it('increments generation when modelOverrides is first added', () => {
+      const before = getCredentialsGeneration()
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: { 'deepseek-v4-flash': { contextWindow: 500_000 } }
+        })
+      } as any)
+      expect(getCredentialsGeneration()).toBe(before + 1)
+    })
+
+    it('increments generation when modelOverrides value changes', () => {
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: { 'deepseek-v4-flash': { contextWindow: 200_000 } }
+        })
+      } as any)
+      const before = getCredentialsGeneration()
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: { 'deepseek-v4-flash': { contextWindow: 500_000 } }
+        })
+      } as any)
+      // 500K crosses the [1m] unlock threshold (200K) — sessions MUST rebuild
+      // so the next CC subprocess is spawned with the suffixed sdkModel.
+      expect(getCredentialsGeneration()).toBe(before + 1)
+    })
+
+    it('increments generation when maxOutputTokens override changes', () => {
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: { 'deepseek-v4-flash': { maxOutputTokens: 32_000 } }
+        })
+      } as any)
+      const before = getCredentialsGeneration()
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: { 'deepseek-v4-flash': { maxOutputTokens: 64_000 } }
+        })
+      } as any)
+      // CLAUDE_CODE_MAX_OUTPUT_TOKENS is injected at subprocess startup; the
+      // session-rebuild signal is the only way the new cap reaches CC.
+      expect(getCredentialsGeneration()).toBe(before + 1)
+    })
+
+    it('does NOT increment when modelOverrides is saved unchanged', () => {
+      // Idempotency check: a no-op save (e.g. user opens panel, closes without
+      // editing) must not churn sessions. Stable serialization (sorted keys)
+      // guards this.
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: {
+            'model-a': { contextWindow: 100_000 },
+            'model-b': { contextWindow: 300_000 }
+          }
+        })
+      } as any)
+      const before = getCredentialsGeneration()
+      saveConfig({
+        aiSources: makeApiKeySource({
+          modelOverrides: {
+            // Different key insertion order — serializer must normalize.
+            'model-b': { contextWindow: 300_000 },
+            'model-a': { contextWindow: 100_000 }
+          }
+        })
+      } as any)
+      expect(getCredentialsGeneration()).toBe(before)
+    })
+
+    it('does NOT increment when an unrelated field changes', () => {
+      const before = getCredentialsGeneration()
+      saveConfig({ isFirstLaunch: false })
+      expect(getCredentialsGeneration()).toBe(before)
     })
   })
 })
