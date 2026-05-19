@@ -345,6 +345,8 @@ MIT — [LICENSE](../LICENSE)
 
 ## パートナー & スポンサー
 
+Halo があなたのプロジェクトにインスピレーションを与えた場合、または Halo をベースに何かを構築した場合は、ぜひご紹介ください。
+
 ### エンタープライズパートナー
 
 <!-- Add your company logo here — submit a PR or contact us at the link below -->

@@ -345,6 +345,8 @@ MIT — [LICENSE](../LICENSE)
 
 ## Socios y Patrocinadores
 
+Si Halo inspiró tu proyecto o construiste algo basado en él, una mención significaría mucho.
+
 ### Socios Empresariales
 
 <!-- Add your company logo here — submit a PR or contact us at the link below -->

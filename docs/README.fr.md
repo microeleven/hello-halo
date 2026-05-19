@@ -345,6 +345,8 @@ MIT — [LICENSE](../LICENSE)
 
 ## Partenaires & Sponsors
 
+Si Halo a inspiré votre projet ou si vous avez construit quelque chose dessus, une mention nous ferait très plaisir.
+
 ### Partenaires d'Entreprise
 
 <!-- Add your company logo here — submit a PR or contact us at the link below -->
