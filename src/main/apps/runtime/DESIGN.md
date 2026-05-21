@@ -193,6 +193,56 @@ via the "Continue" button (in the Activity Thread or Session Detail view).
 plus indefinite user-driven cycles. Acceptable: the alternative is a silently
 incomplete run with no recovery path.
 
+### 2.12 App Chat Prompt Layering (Three-Layer Assembler)
+
+**Decision**: The App chat system prompt is assembled from three ordered
+layers — **Identity**, **Entry**, **Constraint** — by a channel-agnostic
+assembler. Channel-specific content (IM session metadata, sender identity
+rules, security rules) lives in the channel's module, not in the assembler.
+
+```
+src/main/apps/runtime/
+├── prompt/
+│   ├── assembler.ts        — assembleAppChatPrompt(fragments) — joins layers
+│   ├── identity.ts         — buildIdentityFragments() — base + spec + memory + config
+│   └── entry-native.ts     — NATIVE_CHAT_ENTRY — native UI fallback
+└── im-channels/
+    └── im-prompt.ts        — buildImEntry / buildImConstraints / ImSessionContext
+```
+
+**Layer responsibilities**:
+
+| Layer | Answers | Examples |
+|---|---|---|
+| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config |
+| Entry | Where am I, how do I reply | IM group/direct session context, native UI notification tools |
+| Constraint | What I must not do | IM anti-impersonation rules when owners are configured |
+
+**Rationale**:
+- The previous flat builder kept growing channel-specific text every time a
+  new entry point was added (IM bot, then native UI, then group vs direct
+  variants). The file became a god-file that knew every channel.
+- The assembler now only accepts pre-rendered string fragments and joins
+  them with `\n\n---\n\n`. It never branches on channel.
+- Adding a new entry channel (Feishu, Slack, voice, ...) requires one new
+  builder file plus a one-line branch at the assembler call site in
+  `app-chat.ts`. The assembler itself stays untouched.
+- IM-specific knowledge lives in `im-channels/im-prompt.ts`, sibling to other
+  IM concerns (provider impls, session registry, file-send MCP). Matches the
+  hard rule "IM specifics live in im-channels".
+
+**Single call site**: `app-chat.ts` is the only place that decides which
+entry/constraint builder to invoke based on whether `imSession` is present.
+The assembler call itself is one line:
+
+```ts
+const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
+```
+
+**Trade-off**: One extra layer of indirection between `app-chat.ts` and the
+final string. Acceptable: it caps the assembler's blast radius and prevents
+the file from re-acquiring channel knowledge over time.
+
 ---
 
 ## 3. SQLite Schema
@@ -237,18 +287,46 @@ CREATE INDEX idx_entries_app ON activity_entries(app_id, ts DESC);
 
 ```
 src/main/apps/runtime/
-  DESIGN.md           -- This file
-  types.ts            -- AppRuntimeService, AppRunResult, AutomationAppState, ActivityEntry
-  errors.ts           -- Runtime-specific error types
-  migrations.ts       -- Schema for automation_runs + activity_entries
-  store.ts            -- ActivityStore (CRUD for runs and entries)
-  prompt.ts           -- buildAppSystemPrompt() for automation sessions
-  report-tool.ts      -- report_to_user SDK MCP tool
-  concurrency.ts      -- Counting semaphore
-  execute.ts          -- executeRun() core logic
-  service.ts          -- AppRuntimeService implementation
-  index.ts            -- initAppRuntime(), shutdownAppRuntime(), re-exports
+  DESIGN.md                  -- This file
+  types.ts                   -- AppRuntimeService, AppRunResult, AutomationAppState, ActivityEntry
+  errors.ts                  -- Runtime-specific error types
+  migrations.ts              -- Schema for automation_runs + activity_entries
+  store.ts                   -- ActivityStore (CRUD for runs and entries)
+  prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
+  report-tool.ts             -- report_to_user SDK MCP tool
+  notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
+  concurrency.ts              -- Counting semaphore
+  execute.ts                 -- executeRun() core logic for automation runs
+  service.ts                 -- AppRuntimeService implementation
+  index.ts                   -- initAppRuntime(), shutdownAppRuntime(), re-exports
+
+  -- Interactive chat with an App (separate from automation runs):
+  app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
+  config-defaults.ts         -- Merge App config_schema defaults into userConfig
+  dispatch-inbound.ts        -- Route IM inbound messages into app-chat
+  im-permission-registry.ts  -- Per-conversation owner/guest context for SDK gating
+  im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
+  progress-formatter.ts      -- Format streaming progress events for IM transports
+  session-store.ts           -- JSONL persistence for chat history + SDK session IDs
+  file-export-gate.ts        -- Filesystem boundary for AI-attached file delivery
+
+  -- App chat system prompt (Identity / Entry / Constraint layers) — see §2.12:
+  prompt/
+    assembler.ts             -- assembleAppChatPrompt() — channel-agnostic joiner
+    identity.ts              -- buildIdentityFragments() — identity layer
+    entry-native.ts          -- NATIVE_CHAT_ENTRY — native UI entry fragment
+
+  -- IM channel providers and IM-specific prompt content:
+  im-channels/
+    index.ts                 -- ImChannelManager + provider registration
+    manager.ts               -- Generic channel lifecycle (provider-agnostic)
+    im-prompt.ts             -- IM entry/constraint builders + ImSessionContext
+    file-send-mcp.ts         -- send_file_to_chat MCP tool (pre-bound to session)
+    *.provider.ts            -- Brand-specific provider implementations
+                                (wecom-bot.provider.ts, weixin-ilink.provider.ts, ...)
 ```
+
+Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 
 ---
 

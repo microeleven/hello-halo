@@ -21,7 +21,7 @@ import { tmpdir } from 'os'
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
 import { getAppManager } from '../manager'
 import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-chat'
-import type { ImSessionContext } from './prompt-chat'
+import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../services/window.service'
@@ -571,7 +571,7 @@ export async function dispatchInboundMessage(
     senderName,
     isOwner,
     guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
-    ownerNames: hasOwnerRestriction ? owners! : undefined,
+    ownerIds: hasOwnerRestriction ? owners! : undefined,
   })
 
   // Inject file attachment context so the AI can access them via the Read tool.

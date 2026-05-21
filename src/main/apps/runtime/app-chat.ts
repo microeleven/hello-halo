@@ -53,7 +53,10 @@ import {
   v2Sessions
 } from '../../services/agent/session-manager'
 import { stopGeneration } from '../../services/agent/control'
-import { buildAppChatSystemPrompt, type ImSessionContext } from './prompt-chat'
+import { assembleAppChatPrompt } from './prompt/assembler'
+import { buildIdentityFragments } from './prompt/identity'
+import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
+import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
@@ -336,20 +339,29 @@ export async function sendAppChatMessage(
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
 
-  // Read IM permission context early — needed for both system prompt (ownerNames)
+  // Read IM permission context early — needed for both system prompt (ownerIds)
   // and SDK options (guest tool restrictions). null for native Halo chat.
   const permCtx = getImPermissionContext(conversationId)
 
-  const systemPrompt = buildAppChatSystemPrompt({
+  // Three-layer prompt assembly. The assembler is channel-agnostic;
+  // this call site is the only place that knows whether the entry is
+  // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
+  // and src/main/apps/runtime/im-channels/im-prompt.ts.
+  const identity = buildIdentityFragments({
     appSpec: app.spec,
     memoryInstructions,
     userConfig: mergedConfig,
     usesAIBrowser,
     workDir,
     modelInfo: resolvedCreds.displayModel,
-    imSession,
-    ownerNames: permCtx?.ownerNames,
   })
+  const entry = imSession
+    ? buildImEntry(imSession, permCtx?.ownerIds)
+    : NATIVE_CHAT_ENTRY
+  const constraints = imSession
+    ? buildImConstraints(imSession, permCtx?.ownerIds)
+    : []
+  const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
   const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
@@ -453,7 +465,7 @@ export async function sendAppChatMessage(
   //   2. MCP injection control — filter which MCP servers are injected for guests.
   //      Not injected = model can't see the tool at all. Replaces old allowedTools MCP approach.
   // Owner sessions are unaffected (bypassPermissions, full tool access).
-  // permCtx was read earlier (before system prompt build) for ownerNames injection.
+  // permCtx was read earlier (before system prompt build) for ownerIds injection.
   if (permCtx && !permCtx.isOwner) {
     const guestAllowed = permCtx.guestPolicy?.allowedTools ?? []
     // Split: built-in tools only (mcp__ entries are legacy, ignored here)
