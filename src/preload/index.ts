@@ -113,6 +113,7 @@ export interface HaloAPI {
     }>
     aiBrowserEnabled?: boolean  // Enable AI Browser tools
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    tlonKbId?: string  // Chat-with-knowledge-base turn
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number
@@ -433,6 +434,33 @@ export interface HaloAPI {
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
+
+  // Tlon (knowledge base)
+  tlonCreate: (input: { name: string; icon: string; description?: string; linkedDirs?: Array<{ path: string; label: string }> }) => Promise<IpcResponse>
+  tlonList: () => Promise<IpcResponse>
+  tlonListForSpace: (spaceId: string) => Promise<IpcResponse>
+  tlonGet: (kbId: string) => Promise<IpcResponse>
+  tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string }) => Promise<IpcResponse>
+  tlonDelete: (kbId: string) => Promise<IpcResponse>
+  tlonSetDefault: (kbId: string | null) => Promise<IpcResponse>
+  tlonBindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>
+  tlonUnbindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>
+  tlonBindApp: (kbId: string, appId: string) => Promise<IpcResponse>
+  tlonUnbindApp: (kbId: string, appId: string) => Promise<IpcResponse>
+  tlonAddLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<IpcResponse>
+  tlonRemoveLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
+  tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
+  tlonListRaw: (kbId: string) => Promise<IpcResponse>
+  tlonRemoveRaw: (kbId: string, relativePath: string) => Promise<IpcResponse>
+  tlonListWiki: (kbId: string) => Promise<IpcResponse>
+  tlonReadWiki: (kbId: string, pagePath: string) => Promise<IpcResponse>
+  tlonReadIndex: (kbId: string) => Promise<IpcResponse>
+  tlonTriggerIngest: (kbId: string) => Promise<IpcResponse>
+  tlonGetIngestStatus: (kbId: string) => Promise<IpcResponse>
+  tlonPickFiles: () => Promise<IpcResponse>
+  tlonPickFolder: (options?: { title?: string; buttonLabel?: string }) => Promise<IpcResponse>
+  onTlonStatsUpdated: (callback: (data: unknown) => void) => () => void
+  onTlonIngestProgress: (callback: (data: unknown) => void) => () => void
 
   // Store (App Registry)
   storeQuery: (params: { search?: string; type?: string; category?: string; page?: number; pageSize?: number; locale?: string }) => Promise<IpcResponse>
@@ -855,6 +883,33 @@ const api: HaloAPI = {
 
   // Notification (in-app toast)
   onNotificationToast: (callback) => createEventListener('notification:toast', callback),
+
+  // Tlon (knowledge base)
+  tlonCreate: (input) => ipcRenderer.invoke('tlon:create', input),
+  tlonList: () => ipcRenderer.invoke('tlon:list'),
+  tlonListForSpace: (spaceId) => ipcRenderer.invoke('tlon:list-for-space', spaceId),
+  tlonGet: (kbId) => ipcRenderer.invoke('tlon:get', kbId),
+  tlonUpdate: (kbId, updates) => ipcRenderer.invoke('tlon:update', kbId, updates),
+  tlonDelete: (kbId) => ipcRenderer.invoke('tlon:delete', kbId),
+  tlonSetDefault: (kbId) => ipcRenderer.invoke('tlon:set-default', kbId),
+  tlonBindSpace: (kbId, spaceId) => ipcRenderer.invoke('tlon:bind-space', kbId, spaceId),
+  tlonUnbindSpace: (kbId, spaceId) => ipcRenderer.invoke('tlon:unbind-space', kbId, spaceId),
+  tlonBindApp: (kbId, appId) => ipcRenderer.invoke('tlon:bind-app', kbId, appId),
+  tlonUnbindApp: (kbId, appId) => ipcRenderer.invoke('tlon:unbind-app', kbId, appId),
+  tlonAddLinkedDir: (kbId, dir) => ipcRenderer.invoke('tlon:add-linked-dir', kbId, dir),
+  tlonRemoveLinkedDir: (kbId, linkId) => ipcRenderer.invoke('tlon:remove-linked-dir', kbId, linkId),
+  tlonAddFiles: (kbId, filePaths) => ipcRenderer.invoke('tlon:add-files', kbId, filePaths),
+  tlonListRaw: (kbId) => ipcRenderer.invoke('tlon:list-raw', kbId),
+  tlonRemoveRaw: (kbId, relativePath) => ipcRenderer.invoke('tlon:remove-raw', kbId, relativePath),
+  tlonListWiki: (kbId) => ipcRenderer.invoke('tlon:list-wiki', kbId),
+  tlonReadWiki: (kbId, pagePath) => ipcRenderer.invoke('tlon:read-wiki', kbId, pagePath),
+  tlonReadIndex: (kbId) => ipcRenderer.invoke('tlon:read-index', kbId),
+  tlonTriggerIngest: (kbId) => ipcRenderer.invoke('tlon:trigger-ingest', kbId),
+  tlonGetIngestStatus: (kbId) => ipcRenderer.invoke('tlon:get-ingest-status', kbId),
+  tlonPickFiles: () => ipcRenderer.invoke('tlon:pick-files'),
+  tlonPickFolder: (options) => ipcRenderer.invoke('tlon:pick-folder', options),
+  onTlonStatsUpdated: (callback) => createEventListener('tlon:stats-updated', callback),
+  onTlonIngestProgress: (callback) => createEventListener('tlon:ingest-progress', callback),
 
   // Model Capabilities
   modelCapabilitiesResolve: (modelId, overrides) =>

@@ -94,6 +94,7 @@ export function registerAgentHandlers(): void {
           size?: number
         }>
         thinkingEnabled?: boolean  // Enable extended thinking mode
+        tlonKbId?: string  // Chat-with-knowledge-base turn
       }
     ) => {
       try {

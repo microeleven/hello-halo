@@ -46,6 +46,7 @@ import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
 import type { AppErrorCode } from '../../controllers/app.controller'
 import * as storeController from '../../controllers/store.controller'
+import * as tlonController from '../../controllers/tlon.controller'
 import {
   rejectIfRemoteMcpForbidden,
   rejectIfRemoteMcpForbiddenAsync,
@@ -357,6 +358,88 @@ export function registerApiRoutes(app: Express): void {
     } else {
       res.json(space)
     }
+  })
+
+  // ===== Tlon (Knowledge Base) Routes =====
+  // Specific paths first; :kbId catch-alls must follow them.
+  app.get('/api/tlon', async (_req: Request, res: Response) => {
+    res.json(tlonController.listKBs())
+  })
+
+  app.post('/api/tlon', async (req: Request, res: Response) => {
+    res.json(tlonController.createKB(req.body))
+  })
+
+  app.get('/api/tlon/for-space/:spaceId', async (req: Request, res: Response) => {
+    res.json(tlonController.listKBsForSpace(req.params.spaceId))
+  })
+
+  app.get('/api/tlon/:kbId', async (req: Request, res: Response) => {
+    res.json(tlonController.getKB(req.params.kbId))
+  })
+
+  app.put('/api/tlon/:kbId', async (req: Request, res: Response) => {
+    res.json(tlonController.updateKB(req.params.kbId, req.body))
+  })
+
+  app.delete('/api/tlon/:kbId', async (req: Request, res: Response) => {
+    res.json(await tlonController.deleteKB(req.params.kbId))
+  })
+
+  app.post('/api/tlon/:kbId/bind-space', async (req: Request, res: Response) => {
+    res.json(tlonController.bindToSpace(req.params.kbId, req.body.spaceId))
+  })
+
+  app.post('/api/tlon/:kbId/unbind-space', async (req: Request, res: Response) => {
+    res.json(tlonController.unbindFromSpace(req.params.kbId, req.body.spaceId))
+  })
+
+  app.post('/api/tlon/:kbId/bind-app', async (req: Request, res: Response) => {
+    res.json(tlonController.bindToApp(req.params.kbId, req.body.appId))
+  })
+
+  app.post('/api/tlon/:kbId/unbind-app', async (req: Request, res: Response) => {
+    res.json(tlonController.unbindFromApp(req.params.kbId, req.body.appId))
+  })
+
+  app.post('/api/tlon/:kbId/linked-dirs', async (req: Request, res: Response) => {
+    res.json(tlonController.addLinkedDir(req.params.kbId, req.body))
+  })
+
+  app.delete('/api/tlon/:kbId/linked-dirs/:linkId', async (req: Request, res: Response) => {
+    res.json(tlonController.removeLinkedDir(req.params.kbId, req.params.linkId))
+  })
+
+  app.post('/api/tlon/:kbId/files', async (req: Request, res: Response) => {
+    res.json(tlonController.addRawFiles(req.params.kbId, req.body.filePaths || []))
+  })
+
+  app.get('/api/tlon/:kbId/raw', async (req: Request, res: Response) => {
+    res.json(tlonController.listRawFiles(req.params.kbId))
+  })
+
+  app.post('/api/tlon/:kbId/remove-raw', async (req: Request, res: Response) => {
+    res.json(tlonController.removeRawFile(req.params.kbId, req.body.relativePath))
+  })
+
+  app.get('/api/tlon/:kbId/wiki', async (req: Request, res: Response) => {
+    res.json(tlonController.listWikiPages(req.params.kbId))
+  })
+
+  app.post('/api/tlon/:kbId/read-wiki', async (req: Request, res: Response) => {
+    res.json(tlonController.readWikiPage(req.params.kbId, req.body.pagePath))
+  })
+
+  app.get('/api/tlon/:kbId/index', async (req: Request, res: Response) => {
+    res.json(tlonController.readIndexMd(req.params.kbId))
+  })
+
+  app.post('/api/tlon/:kbId/ingest', async (req: Request, res: Response) => {
+    res.json(await tlonController.triggerIngest(req.params.kbId))
+  })
+
+  app.get('/api/tlon/:kbId/ingest-status', async (req: Request, res: Response) => {
+    res.json(tlonController.getIngestStatus(req.params.kbId))
   })
 
   // ===== Conversation Routes =====
