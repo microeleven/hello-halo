@@ -952,7 +952,7 @@
   "Pause": "一時停止",
   "Pause learning": "",
   "Paused": "",
-  "PDF, documents, spreadsheets, presentations, and text files (Markdown, code, JSON, CSV…). Folders are imported recursively.": "",
+  "PDF, documents, spreadsheets, presentations, Markdown, text, CSV, HTML. Folders import recursively — source code and system files are skipped.": "",
   "Pending": "保留中",
   "Permission Control": "権限制御",
   "Permissions": "権限",
