@@ -1,30 +1,30 @@
 /**
- * Tlon ingest orchestration.
+ * Tlon ingest orchestration — compounding curator.
  *
- * Model: enqueue-ALL-then-process so the batch total is correct from the start
- * (never queue one-by-one with each item triggering processing).
+ * Each source file is folded into the wiki by a headless agent (the Halo agent
+ * engine via `query`) whose working directory IS the KB's wiki/ dir. The agent
+ * searches existing pages (Glob/Grep), reads the relevant ones, and merges the
+ * new source in (Write/Edit) — so the wiki compounds across sources instead of
+ * accumulating per-document summaries.
  *
- * AI calls are direct, non-streaming HTTP requests via proxyFetch. They do NOT
- * go through the agent V2 SDK session machinery — ingest is a single
- * request/response per source file. `stream: false` is mandatory (DeepSeek and
- * other OpenAI-compatible gateways hang on body read otherwise).
+ * Files are processed STRICTLY SEQUENTIALLY: each agent run must see the wiki
+ * state left by the previous file, and concurrent runs would race writes to the
+ * same pages.
  *
  * Learned status is persisted only on success (hashes.json), and index.md is
- * always rebuilt programmatically from the wiki directory — the model's own
- * index output is never trusted.
- *
- * No relative-path require(): all imports are static; the only dynamic import
- * is reserved for breaking a real module cycle.
+ * always rebuilt programmatically from the wiki directory — the agent never
+ * touches it.
  */
 
-import { join, dirname, sep } from 'path'
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'fs'
+import { join, sep } from 'path'
+import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync, statSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
-import { getAISourceManager } from '../ai-sources'
-import { proxyFetch } from '../proxy-fetch'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import type { DirectCallEndpoint } from '../../../shared/types/ai-sources'
+import { getConfig } from '../../foundation/config.service'
+import { getApiCredentials, getHeadlessElectronPath } from '../agent/helpers'
+import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../agent/sdk-config'
+import { query } from '../agent/resolved-sdk'
 import type {
   IngestJob,
   IngestProgressEvent,
@@ -39,7 +39,6 @@ import {
   getKB,
   readHashes,
   writeHashes,
-  readIndexMd,
   listWikiPages,
   refreshStats,
   markIngestCompleted,
@@ -49,8 +48,8 @@ import {
 } from './service'
 import { extractText } from './extract'
 import {
-  buildIngestSystemPrompt,
-  buildIngestUserMessage,
+  buildCuratorSystemPrompt,
+  buildCuratorUserMessage,
   DEFAULT_INDEX_MD,
 } from './defaults'
 
@@ -61,14 +60,6 @@ import {
 const queues = new Map<string, IngestJob[]>()
 const processing = new Set<string>()
 const progress = new Map<string, IngestProgressEvent>()
-
-/**
- * How many source files have their model call in flight at once per KB. Model
- * calls are network-bound (seconds each); running a few concurrently is the
- * main speedup. Result application stays serialized (see processQueue), so this
- * cap never races hashes.json or index.md.
- */
-const INGEST_CONCURRENCY = 4
 
 function emitProgress(event: IngestProgressEvent): void {
   progress.set(event.kbId, event)
@@ -150,12 +141,9 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
 }
 
 /**
- * Process the queue from a watcher-driven enqueue. Sets total to the current
- * queue length when starting a fresh batch.
- *
- * Model calls run with bounded concurrency; each result is applied through a
- * single serialized chain so hashes.json read-modify-write and the index.md
- * rebuild never overlap.
+ * Process the queue: fold each pending file into the wiki one at a time via the
+ * curator agent. Strictly sequential — each run must see the previous file's
+ * merges, and concurrent runs would race writes to the same pages.
  */
 export async function processQueue(kbId: string): Promise<void> {
   if (processing.has(kbId)) return
@@ -166,39 +154,14 @@ export async function processQueue(kbId: string): Promise<void> {
   const total = queue.length
   let completed = 0
 
-  // Resolve the call endpoint once for the whole batch (the active source does
-  // not change mid-batch). Owned by the AI-sources manager so URL/headers/wire
-  // format stay consistent with the agent path. `responses` / `kiro` need the
-  // router's translation layer and cannot be called directly.
-  const manager = getAISourceManager()
-  await manager.ensureInitialized()
-  const endpoint = manager.getDirectCallEndpoint()
-  const unsupported =
-    endpoint && (endpoint.apiType === 'responses' || endpoint.apiType === 'kiro')
-      ? `API type '${endpoint.apiType}' is not supported for ingest`
-      : null
-  if (!endpoint || unsupported) {
-    const message = unsupported || 'No AI source configured'
-    console.error(`[Tlon] Cannot ingest for ${kbId}: ${message}`)
-    setKBStatus(kbId, 'error')
-    emitProgress({ kbId, total, completed: 0, phase: 'error', error: message })
-    processing.delete(kbId)
-    queues.delete(kbId)
-    return
-  }
-
-  // Ensure a running phase with the full total is published before work starts.
   const existing = progress.get(kbId)
   if (!existing || existing.phase !== 'running' || existing.total < total) {
     emitProgress({ kbId, total, completed: 0, phase: 'running' })
   }
 
-  let applyChain: Promise<void> = Promise.resolve()
-
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const job = queue.shift()
-      if (!job) break
+  try {
+    while (queue.length > 0) {
+      const job = queue.shift() as IngestJob
       emitProgress({
         kbId,
         total,
@@ -207,9 +170,7 @@ export async function processQueue(kbId: string): Promise<void> {
         phase: 'running',
       })
       try {
-        const fetched = await fetchIngest(job, endpoint)
-        applyChain = applyChain.then(() => applyIngest(fetched))
-        await applyChain
+        await runCuratorIngest(kbId, job)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`[Tlon] Ingest failed for ${job.sourcePath}:`, message)
@@ -219,11 +180,6 @@ export async function processQueue(kbId: string): Promise<void> {
       completed++
       emitProgress({ kbId, total, completed, phase: 'running' })
     }
-  }
-
-  try {
-    const pool = Array.from({ length: Math.min(INGEST_CONCURRENCY, total) }, () => worker())
-    await Promise.all(pool)
   } finally {
     processing.delete(kbId)
     queues.delete(kbId)
@@ -235,132 +191,25 @@ export async function processQueue(kbId: string): Promise<void> {
 }
 
 // ============================================================================
-// Model call
+// Curator agent (compounding ingest)
 // ============================================================================
-//
-// Endpoint resolution (URL normalization, wire format, auth headers) is owned
-// by the AI-sources manager (getDirectCallEndpoint) so it stays consistent with
-// the agent/router path. Here we only shape the request/parse the response for
-// the two wire formats a direct, non-streaming caller can speak.
-
-async function callModel(
-  endpoint: DirectCallEndpoint,
-  systemPrompt: string,
-  userMessage: string
-): Promise<string> {
-  const isAnthropic = endpoint.wireFormat === 'anthropic'
-  const body = isAnthropic
-    ? {
-        model: endpoint.model,
-        max_tokens: 8192,
-        stream: false,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      }
-    : {
-        model: endpoint.model,
-        stream: false,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-      }
-
-  const res = await proxyFetch(endpoint.url, {
-    method: 'POST',
-    headers: endpoint.headers,
-    body: JSON.stringify(body),
-  })
-
-  const text = await res.text()
-  if (!res.ok) {
-    throw new Error(`API ${res.status}: ${text.slice(0, 500)}`)
-  }
-
-  let json: any
-  try {
-    json = JSON.parse(text)
-  } catch {
-    throw new Error(`Non-JSON response: ${text.slice(0, 200)}`)
-  }
-
-  if (isAnthropic) {
-    const content = json?.content
-    if (Array.isArray(content)) {
-      return content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).join('')
-    }
-    throw new Error('Unexpected Anthropic response shape')
-  }
-
-  const out = json?.choices?.[0]?.message?.content
-  if (typeof out === 'string') return out
-  throw new Error('Unexpected OpenAI-compatible response shape')
-}
-
-// ============================================================================
-// Single-file ingest
-// ============================================================================
-
-interface ParsedWikiPage {
-  path: string
-  body: string
-}
-
-/** Parse `<!-- file: path -->` ... `<!-- endfile -->` blocks from model output. */
-function parseWikiBlocks(output: string): ParsedWikiPage[] {
-  const pages: ParsedWikiPage[] = []
-  const re = /<!--\s*file:\s*(.+?)\s*-->\s*\n([\s\S]*?)(?=\n<!--\s*endfile\s*-->|\n<!--\s*file:|$)/g
-  let match: RegExpExecArray | null
-  while ((match = re.exec(output)) !== null) {
-    const rawPath = match[1].trim()
-    let body = match[2]
-    // Strip a wrapping ```markdown fence if the model added one anyway.
-    const fence = body.trim().match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/)
-    if (fence) body = fence[1]
-    // A real wiki page begins with an H1 title. Drop any leading model chatter
-    // (e.g. "I'll create the following pages…") before it, and reject the block
-    // entirely if it has no heading at all — that is pure commentary, not a page.
-    const h1 = body.search(/^#\s/m)
-    if (h1 < 0) continue
-    body = body.slice(h1)
-    // Remove any stray HTML-comment markers the model embedded mid-page.
-    body = body.replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*$/gm, '').trim()
-    // Normalize the path: drop leading wiki/ and any absolute prefix.
-    let rel = rawPath.replace(/^\/+/, '').replace(/^wiki\//, '')
-    if (!rel.toLowerCase().endsWith('.md')) rel += '.md'
-    // Reject path traversal.
-    if (rel.includes('..')) continue
-    pages.push({ path: rel, body: body.replace(/\s+$/, '') + '\n' })
-  }
-  return pages
-}
-
-interface FetchedIngest {
-  job: IngestJob
-  pages: ParsedWikiPage[]
-  contentHash: string
-  skipped: boolean
-}
 
 /**
- * Read a source file and run its model call against the pre-resolved endpoint.
- * Safe to run concurrently: touches only per-job state and read-only KB files
- * (schema/index for context). All shared-state writes happen later in
- * applyIngest.
+ * Fold one source file into the wiki via the curator agent, then record its
+ * learned status and rebuild the index. Throws on agent failure so the caller
+ * marks the KB errored and the file stays "not learned".
  */
-async function fetchIngest(job: IngestJob, endpoint: DirectCallEndpoint): Promise<FetchedIngest> {
+async function runCuratorIngest(kbId: string, job: IngestJob): Promise<void> {
   job.status = 'running'
   job.startedAt = new Date().toISOString()
 
-  // Read raw bytes (hashed for learned-status), then extract ingestible text.
-  // Text files decode as UTF-8; PDF/Office documents go through a parser.
   let buf: Buffer
   try {
     buf = readFileSync(job.absolutePath)
   } catch {
     job.status = 'skipped'
     console.warn(`[Tlon] Cannot read ${job.absolutePath}, skipping`)
-    return { job, pages: [], contentHash: '', skipped: true }
+    return
   }
   const contentHash = sha256(buf)
 
@@ -368,68 +217,125 @@ async function fetchIngest(job: IngestJob, endpoint: DirectCallEndpoint): Promis
   try {
     fileContent = await extractText(job.absolutePath, buf)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.warn(`[Tlon] Failed to extract text from ${job.sourcePath}: ${message}`)
+    console.warn(`[Tlon] Failed to extract ${job.sourcePath}: ${error instanceof Error ? error.message : String(error)}`)
     job.status = 'skipped'
-    return { job, pages: [], contentHash: '', skipped: true }
+    return
   }
   if (!fileContent.trim()) {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
     job.status = 'skipped'
-    return { job, pages: [], contentHash: '', skipped: true }
+    return
   }
 
-  // Build prompts.
-  const schema = existsSync(getKBSchemaPath(job.kbId))
-    ? readFileSync(getKBSchemaPath(job.kbId), 'utf-8')
-    : ''
-  const indexContent = readIndexMd(job.kbId) || ''
-  const systemPrompt = buildIngestSystemPrompt(schema)
-  const userMessage = buildIngestUserMessage(job, indexContent, fileContent)
+  const wikiDir = getKBWikiDir(kbId)
+  const before = snapshotWikiMtimes(wikiDir)
 
-  // Call model.
-  const output = await callModel(endpoint, systemPrompt, userMessage)
-  return { job, pages: parseWikiBlocks(output), contentHash, skipped: false }
-}
+  await runCuratorAgent(kbId, job.sourcePath, fileContent, wikiDir)
 
-/**
- * Write a fetched result to disk. MUST run serialized per KB: it does the
- * hashes.json read-modify-write and the programmatic index.md rebuild, both of
- * which would corrupt under concurrent execution.
- */
-function applyIngest(fetched: FetchedIngest): void {
-  const { job, pages, contentHash, skipped } = fetched
-  if (skipped) return
+  // Pages whose files changed during this run are this source's wiki pages.
+  const affected = changedPages(before, snapshotWikiMtimes(wikiDir))
 
-  // Write wiki pages.
-  const wikiDir = getKBWikiDir(job.kbId)
-  const written: string[] = []
-  for (const page of pages) {
-    const abs = join(wikiDir, page.path)
-    mkdirSync(dirname(abs), { recursive: true })
-    writeFileSync(abs, page.body, 'utf-8')
-    written.push(page.path)
-  }
+  rebuildIndexMd(kbId)
+  appendLog(job, affected)
 
-  // Rebuild index.md programmatically.
-  rebuildIndexMd(job.kbId)
-
-  // Append a one-line log entry.
-  appendLog(job, written)
-
-  // Persist learned status (only on success).
-  const hashes: IngestHashesV1 = readHashes(job.kbId)
+  const hashes: IngestHashesV1 = readHashes(kbId)
   hashes.files[job.sourcePath] = {
     hash: contentHash,
     ingestedAt: new Date().toISOString(),
-    wikiPages: written,
+    wikiPages: affected,
   }
-  writeHashes(job.kbId, hashes)
+  writeHashes(kbId, hashes)
 
   job.status = 'completed'
   job.completedAt = new Date().toISOString()
   job.contentHash = contentHash
-  job.wikiPagesAffected = written
+  job.wikiPagesAffected = affected
+}
+
+/**
+ * Run the headless curator agent over the KB's wiki dir for one source. cwd is
+ * the wiki, so the agent's Read/Glob/Grep/Write/Edit tools operate directly on
+ * existing pages. Restricted toolset (no Bash/Skill/web), bypass permissions
+ * (headless, no UI), no MCP/digital-humans/browser.
+ */
+async function runCuratorAgent(
+  kbId: string,
+  sourcePath: string,
+  fileContent: string,
+  wikiDir: string
+): Promise<void> {
+  const config = getConfig()
+  const credentials = await getApiCredentials(config)
+  const resolved = await resolveCredentialsForSdk(credentials)
+  const electronPath = getHeadlessElectronPath()
+  const schema = existsSync(getKBSchemaPath(kbId))
+    ? readFileSync(getKBSchemaPath(kbId), 'utf-8')
+    : ''
+
+  const sdkOptions = buildBaseSdkOptions({
+    credentials: resolved,
+    workDir: wikiDir,
+    electronPath,
+    spaceId: `tlon-ingest:${kbId}`,
+    conversationId: `tlon-ingest-${uuidv4()}`,
+    mcpServers: null,
+    maxTurns: 60,
+    promptProfile: config.agent?.promptProfile,
+    configDirMode: config.agent?.configDirMode,
+    customConfigDir: config.agent?.customConfigDir,
+    aiBrowserEnabled: false,
+    digitalHumansEnabled: false,
+  })
+  sdkOptions.systemPrompt = buildCuratorSystemPrompt(schema)
+  sdkOptions.allowedTools = ['Read', 'Write', 'Edit', 'Grep', 'Glob']
+  sdkOptions.disallowedTools = ['Bash', 'Skill', 'Task', 'WebSearch', 'WebFetch', 'TodoWrite']
+  sdkOptions.maxThinkingTokens = 0
+
+  const userMessage = buildCuratorUserMessage(sourcePath, fileContent)
+
+  let resultError: string | null = null
+  for await (const msg of query({ prompt: userMessage, options: sdkOptions })) {
+    const m = msg as { type?: string; subtype?: string; is_error?: boolean }
+    if (m?.type === 'result') {
+      if (m.is_error) resultError = m.subtype || 'agent error'
+      break
+    }
+  }
+  if (resultError) {
+    throw new Error(`Curator agent failed: ${resultError}`)
+  }
+}
+
+/** Map of wiki-relative .md path -> mtime (ms), to detect changed pages. */
+function snapshotWikiMtimes(wikiDir: string): Map<string, number> {
+  const out = new Map<string, number>()
+  if (!existsSync(wikiDir)) return out
+  const stack = ['']
+  while (stack.length > 0) {
+    const rel = stack.pop() as string
+    let entries: string[]
+    try { entries = readdirSync(join(wikiDir, rel)) } catch { continue }
+    for (const name of entries) {
+      const childRel = rel ? join(rel, name) : name
+      let st
+      try { st = statSync(join(wikiDir, childRel)) } catch { continue }
+      if (st.isDirectory()) stack.push(childRel)
+      else if (st.isFile() && childRel.toLowerCase().endsWith('.md')) {
+        out.set(childRel.split(sep).join('/'), st.mtimeMs)
+      }
+    }
+  }
+  return out
+}
+
+/** Pages added or modified between two mtime snapshots. */
+function changedPages(before: Map<string, number>, after: Map<string, number>): string[] {
+  const changed: string[] = []
+  after.forEach((mtime, path) => {
+    const prev = before.get(path)
+    if (prev === undefined || mtime > prev) changed.push(path)
+  })
+  return changed.sort()
 }
 
 /**
