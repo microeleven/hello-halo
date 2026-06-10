@@ -66,7 +66,7 @@ export function CreateKBDialog({ onClose, onCreated }: CreateKBDialogProps) {
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleCreate() }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) handleCreate() }}
             placeholder={t('My knowledge base')}
             className="w-full px-3 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors text-sm"
             autoFocus
