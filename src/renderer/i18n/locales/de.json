@@ -955,7 +955,7 @@
   "Pause": "Pausieren",
   "Pause learning": "",
   "Paused": "",
-  "PDF, PowerPoint, Word, Excel, and text files (Markdown, code, JSON, CSV…). Folders are imported recursively.": "",
+  "PDF, PowerPoint, Word, Excel, Markdown, text, CSV, HTML. Folders import recursively — source code and system files are skipped.": "",
   "Pending": "Ausstehend",
   "Permission Control": "Berechtigungssteuerung",
   "Permissions": "Berechtigungen",

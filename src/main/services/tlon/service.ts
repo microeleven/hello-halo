@@ -61,30 +61,34 @@ import {
 import { isExtractable } from './extract'
 
 // ============================================================================
-// Accepted text extensions (case-insensitive). Everything else is rejected.
+// Accepted source extensions (case-insensitive). Everything else is rejected.
+//
+// Deliberately DOCUMENT-like only: prose, notes, tabular data, web pages.
+// Source code and config/data dumps (.ts/.py/.go/.json/.yaml/.xml/.sh/.log…)
+// are NOT knowledge — accepting them turns the wiki into noise (e.g. dropping a
+// whole repo). Documents that need extraction (PDF/PPTX/DOCX/XLSX) are handled
+// separately by isExtractable.
 // ============================================================================
 
 const TEXT_EXTENSIONS = new Set([
-  '.md', '.markdown', '.txt', '.text', '.json', '.yaml', '.yml', '.csv', '.tsv',
-  '.html', '.htm', '.xml', '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.c',
-  '.h', '.cpp', '.hpp', '.cs', '.go', '.rs', '.rb', '.php', '.sh', '.sql',
-  '.css', '.scss', '.log', '.ini', '.toml', '.rst', '.org',
+  '.md', '.markdown', '.txt', '.text', '.rst', '.org',
+  '.csv', '.tsv', '.html', '.htm',
 ])
 
 /**
  * Directory names never worth copying into a knowledge base. Pruned during
- * recursive folder import so dropping a project root does not duplicate VCS
- * metadata or dependency trees into raw/.
+ * recursive folder import so dropping a project root does not pull in VCS
+ * metadata, dependency trees, or build artifacts.
  */
 const IGNORED_IMPORT_DIRS = new Set([
   '.git', '.svn', '.hg', 'node_modules', '.venv', '__pycache__',
+  'dist', 'build', '.next', 'target', 'vendor', 'coverage',
+  '.idea', '.vscode', '.cache', '.gradle',
 ])
 
-/** True when the path has an accepted text extension. */
+/** True when the path has an accepted (document-like) text extension. */
 export function isAcceptedTextFile(filePath: string): boolean {
   const lower = filePath.toLowerCase()
-  // Special-case multi-part extension allowed by the contract.
-  if (lower.endsWith('.env.example')) return true
   const dot = lower.lastIndexOf('.')
   if (dot < 0) return false
   return TEXT_EXTENSIONS.has(lower.slice(dot))
