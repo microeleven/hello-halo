@@ -1,15 +1,12 @@
 /**
- * Tlon ingest defaults — seed file contents and the proven ingest prompt
- * format.
+ * Tlon ingest defaults — seed file contents and the compounding-curator prompts.
  *
- * The ingest prompt asks the model to emit wiki pages as fenced blocks
- * delimited by `<!-- file: <wiki-relative-path> -->` markers. ingest.ts parses
- * these markers; index.md is rebuilt programmatically afterwards (the model's
- * index output is never trusted — it tends to wrap content in ```markdown
- * fences).
+ * Ingest runs as a headless agent whose working directory IS the wiki: it
+ * searches existing pages (Glob/Grep), reads the relevant ones, and merges each
+ * new source in (Write/Edit) so the wiki compounds across sources rather than
+ * accumulating per-document summaries. index.md is rebuilt programmatically
+ * afterwards (the agent never touches it).
  */
-
-import type { IngestJob } from '../../../shared/types/tlon'
 
 export const DEFAULT_SCHEMA_MD = `# Wiki Schema
 
@@ -35,57 +32,42 @@ export const DEFAULT_LOG_MD = `# Ingest Log
 `
 
 /**
- * Build the ingest system prompt: built-in curator instructions merged with
- * the KB's editable schema.md.
+ * System prompt for the compounding curator agent. Its working directory IS the
+ * wiki/ folder; it uses Read/Glob/Grep/Write/Edit to fold a new source into the
+ * existing pages.
  */
-export function buildIngestSystemPrompt(schema: string): string {
-  return `You are a wiki curator. Your job is to ingest a single source document into a structured wiki by emitting wiki pages.
+export function buildCuratorSystemPrompt(schema: string): string {
+  return `You are the curator of a compounding knowledge wiki. Your current working directory IS the wiki — its pages are markdown files you can Glob, Grep, Read, Write, and Edit. The wiki must always represent everything known about each topic, MERGED across all sources — never a pile of per-document summaries.
 
-## Wiki Schema
-${schema.trim()}
+You will be given ONE new source document. Fold its knowledge into the wiki.
 
-## Output format (STRICT)
-For every wiki page you create or update, output a block in EXACTLY this form:
+## Procedure (do this for every meaningful topic / entity / person / project in the document)
+1. SEARCH the existing wiki first: Glob for likely filenames and Grep for the name/topic. Always check before creating anything.
+2. If a page already covers it: Read that page, then Edit/Write it to MERGE the new information — keep ALL prior facts, add the new ones, reconcile contradictions by keeping both with their dates. Never delete or shrink existing knowledge.
+3. If no page exists: Write a new page. Follow the existing folder structure and naming you observed while searching.
 
-<!-- file: <wiki-relative-path>.md -->
-<full markdown content of the page>
-<!-- endfile -->
+## Rules
+- One topic per page. Page names are short, stable, kebab-case. NEVER rename an existing page.
+- Cross-link related pages with \`[[page-name]]\`.
+- Preserve exact quotes, numbers, dates, stock codes, and proper nouns from the source.
+- Every page starts with an \`# H1\` title. Maintain a \`> Sources:\` line near the top listing the source documents it draws from; append the new source if not already there.
+- NEVER create or edit \`index.md\` — the index is generated automatically.
+- You DO have write access to this directory — never create probe/test/scratch files to check; just write the real pages.
+- Make your edits with the tools, then STOP. Do not output prose, plans, or summaries; the result of your work is the files you changed.
 
-Rules for the output:
-- The path is relative to the wiki/ directory (e.g. \`topics/foo.md\`). Do NOT include \`wiki/\` or absolute paths.
-- Emit the COMPLETE final content of each page between the markers — not a diff.
-- Do NOT wrap page content in triple-backtick code fences.
-- Do NOT emit an index page; the index is generated automatically.
-- Output ONLY file blocks. No commentary before, between, or after them.
-
-## Curation rules
-- Prefer updating an existing page over creating a near-duplicate one.
-- Use \`[[page-name]]\` for cross-links between pages.
-- Preserve exact quotes, numbers, dates, and proper nouns.
-- Keep page names short and stable (kebab-case).`
+## Wiki conventions (schema)
+${schema.trim()}`
 }
 
-/**
- * Build the ingest user message for a single source file.
- *
- * @param job          the ingest job (carries the source path label)
- * @param indexContent current index.md content (navigation map for context)
- * @param fileContent  the raw text of the source file to ingest
- */
-export function buildIngestUserMessage(
-  job: IngestJob,
-  indexContent: string,
-  fileContent: string
-): string {
-  return `Ingest the following source document into the wiki.
+/** User message handing the curator the new source document to fold in. */
+export function buildCuratorUserMessage(sourcePath: string, fileContent: string): string {
+  return `Fold the following new source document into the wiki.
 
-Source path: ${job.sourcePath}
+Source: ${sourcePath}
 
-## Current wiki index (for context — pages that already exist)
-${indexContent.trim() || '(empty)'}
+Search for existing related pages first, merge the new information into them, and create pages only for genuinely new topics. Then stop.
 
-## Source document content
+--- BEGIN SOURCE: ${sourcePath} ---
 ${fileContent}
-
-Emit the wiki page file blocks now, following the strict output format.`
+--- END SOURCE ---`
 }
