@@ -47,6 +47,9 @@ export function ChatTab({ kb }: ChatTabProps) {
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      // Don't send while an IME is composing — the Enter is confirming a
+      // candidate (e.g. pinyin), not submitting.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return
       e.preventDefault()
       handleSend()
     }
