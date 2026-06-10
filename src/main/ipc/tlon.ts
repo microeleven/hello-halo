@@ -35,6 +35,7 @@ export function registerTlonHandlers(): void {
     tlonReadWiki: async (kbId: string, pagePath: string) => tlonController.readWikiPage(kbId, pagePath),
     tlonReadIndex: async (kbId: string) => tlonController.readIndexMd(kbId),
     tlonTriggerIngest: async (kbId: string) => tlonController.triggerIngest(kbId),
+    tlonClearRelearn: async (kbId: string) => tlonController.clearAndRelearn(kbId),
     tlonGetIngestStatus: async (kbId: string) => tlonController.getIngestStatus(kbId),
 
     // Pickers open the OS dialog directly (renderer has no filesystem access).

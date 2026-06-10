@@ -204,6 +204,7 @@ export interface HaloAPI {
   tlonReadWiki: (kbId: string, pagePath: string) => Promise<IpcResponse>
   tlonReadIndex: (kbId: string) => Promise<IpcResponse>
   tlonTriggerIngest: (kbId: string) => Promise<IpcResponse>
+  tlonClearRelearn: (kbId: string) => Promise<IpcResponse>
   tlonGetIngestStatus: (kbId: string) => Promise<IpcResponse>
   tlonPickFiles: () => Promise<IpcResponse>
   tlonPickFolder: (options?: { title?: string; buttonLabel?: string }) => Promise<IpcResponse>

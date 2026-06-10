@@ -100,6 +100,7 @@ interface TlonState {
 
   // ── Ingest ────────────────────────────────
   triggerIngest: (kbId: string) => Promise<void>
+  clearAndRelearn: (kbId: string) => Promise<boolean>
   loadIngestStatus: (kbId: string) => Promise<void>
 
   // ── KB chat (ephemeral) ───────────────────
@@ -413,6 +414,27 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       await api.tlon.triggerIngest(kbId)
     } catch (err) {
       console.error('[TlonStore] triggerIngest error:', err)
+    }
+  },
+
+  clearAndRelearn: async (kbId) => {
+    try {
+      const res = await api.tlon.clearRelearn(kbId)
+      if (!res.success) {
+        useNotificationStore.getState().show({
+          title: (res.error as string) || i18n.t('Could not start relearning.'),
+          variant: 'warning',
+          duration: 4000,
+        })
+        return false
+      }
+      // Wiki is wiped immediately; re-ingest progress arrives via events.
+      await get().loadRawFiles(kbId)
+      await get().loadWiki(kbId)
+      return true
+    } catch (err) {
+      console.error('[TlonStore] clearAndRelearn error:', err)
+      return false
     }
   },
 

@@ -781,6 +781,30 @@ export function refreshStats(kbId: string): KBStats {
 }
 
 /**
+ * Wipe the generated wiki + learned-status so the KB can be relearned from
+ * scratch (raw/ and watched folders are the sources and are left untouched).
+ * Used by the "clear & relearn" flow to rebuild older KBs with the current
+ * compounding curator.
+ */
+export function clearWikiAndHashes(kbId: string): boolean {
+  const entry = getRegistry().get(kbId)
+  if (!entry) return false
+  const wikiDir = getKBWikiDir(kbId)
+  try {
+    rmSync(wikiDir, { recursive: true, force: true })
+  } catch (error) {
+    console.error(`[Tlon] Failed to clear wiki for ${kbId}:`, error)
+  }
+  mkdirSync(wikiDir, { recursive: true })
+  writeHashes(kbId, { version: 1, files: {} })
+  try {
+    writeFileSync(getKBIndexMdPath(kbId), DEFAULT_INDEX_MD, 'utf-8')
+  } catch { /* ignore */ }
+  refreshStats(kbId)
+  return true
+}
+
+/**
  * Live learned-status for all raw files. A file is `learned` IFF hashes.json
  * has an entry whose stored hash equals the current content hash.
  */

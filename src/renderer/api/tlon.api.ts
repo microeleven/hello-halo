@@ -94,6 +94,10 @@ export const tlonApi = {
       if (isElectron()) return window.halo.tlonTriggerIngest(kbId)
       return httpRequest('POST', `/api/tlon/${kbId}/ingest`)
     },
+    clearRelearn: async (kbId: string): Promise<ApiResponse> => {
+      if (isElectron()) return window.halo.tlonClearRelearn(kbId)
+      return httpRequest('POST', `/api/tlon/${kbId}/clear-relearn`)
+    },
     getIngestStatus: async (kbId: string): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonGetIngestStatus(kbId)
       return httpRequest('GET', `/api/tlon/${kbId}/ingest-status`)

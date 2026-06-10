@@ -44,6 +44,7 @@ import {
   markIngestCompleted,
   setKBStatus,
   collectIngestCandidates,
+  clearWikiAndHashes,
   sha256,
 } from './service'
 import { extractText } from './extract'
@@ -138,6 +139,22 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
   }
 
   await processQueue(kbId)
+}
+
+/** True while a KB's queue is being processed (used to block clear-relearn). */
+export function isIngesting(kbId: string): boolean {
+  return processing.has(kbId)
+}
+
+/**
+ * Wipe the generated wiki + learned-status, then re-ingest every source from
+ * scratch with the current compounding curator. Used to rebuild older KBs.
+ */
+export async function clearAndRelearn(kbId: string): Promise<void> {
+  if (processing.has(kbId)) throw new Error('Ingest already in progress')
+  clearWikiAndHashes(kbId)
+  emitStatsUpdated(kbId)
+  await triggerFullIngest(kbId)
 }
 
 /**
