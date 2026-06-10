@@ -56,6 +56,6 @@ export {
   getRawFileLearnedStatus,
 } from './service'
 
-export { triggerFullIngest, getIngestProgress } from './ingest'
+export { triggerFullIngest, getIngestProgress, clearAndRelearn, isIngesting } from './ingest'
 
 export { initTlonWatchers, shutdownTlon } from './watcher'

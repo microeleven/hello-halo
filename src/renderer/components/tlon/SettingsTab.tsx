@@ -10,7 +10,7 @@ import { api } from '../../api'
 import { useTlonStore } from '../../stores/tlon.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
-import { Trash2, FolderPlus, FolderOpen, X, Check, Pause, Play } from 'lucide-react'
+import { Trash2, FolderPlus, FolderOpen, X, Check, Pause, Play, RefreshCw } from 'lucide-react'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 
 interface SettingsTabProps {
@@ -23,6 +23,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
   const { showConfirm, DialogComponent } = useConfirmDialog()
   const updateKB = useTlonStore(s => s.updateKB)
   const deleteKB = useTlonStore(s => s.deleteKB)
+  const clearAndRelearn = useTlonStore(s => s.clearAndRelearn)
   const bindSpace = useTlonStore(s => s.bindSpace)
   const unbindSpace = useTlonStore(s => s.unbindSpace)
   const addLinkedDir = useTlonStore(s => s.addLinkedDir)
@@ -65,6 +66,17 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
       const success = await deleteKB(kb.id)
       if (success) onDeleted()
     }
+  }
+
+  const handleClearRelearn = async () => {
+    const ok = await showConfirm({
+      title: t('Clear & relearn'),
+      message: t('Discard all AI notes and rebuild them from the source files? The sources are kept; only the generated notes are regenerated. This can take a while.'),
+      confirmLabel: t('Clear & relearn'),
+      cancelLabel: t('Cancel'),
+      variant: 'danger',
+    })
+    if (ok) await clearAndRelearn(kb.id)
   }
 
   const handleAddFolder = async () => {
@@ -203,6 +215,19 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
           {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
           {isPaused ? t('Resume learning') : t('Pause learning')}
         </button>
+
+        <div>
+          <button
+            onClick={handleClearRelearn}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-secondary hover:bg-secondary/80 rounded-lg text-sm transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            {t('Clear & relearn')}
+          </button>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            {t('Rebuilds AI notes from the source files. Use after adding many sources or to apply newer learning.')}
+          </p>
+        </div>
 
         <div>
           <button

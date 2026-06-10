@@ -25,6 +25,8 @@ import {
   readIndexMd as svcReadIndexMd,
   triggerFullIngest as svcTriggerFullIngest,
   getIngestProgress as svcGetIngestProgress,
+  clearAndRelearn as svcClearAndRelearn,
+  isIngesting as svcIsIngesting,
 } from '../services/tlon'
 import type {
   CreateKBInput,
@@ -175,6 +177,19 @@ export async function triggerIngest(kbId: string): Promise<ControllerResponse> {
     // progress events. Return immediately so the UI can show the running state.
     void svcTriggerFullIngest(kbId).catch(err =>
       console.error(`[Tlon] triggerIngest failed for ${kbId}:`, err)
+    )
+    return ok(true)
+  } catch (e) { return fail(e) }
+}
+
+export function clearAndRelearn(kbId: string): ControllerResponse {
+  try {
+    if (svcIsIngesting(kbId)) {
+      return { success: false, error: 'Learning is already in progress' }
+    }
+    // Fire-and-forget: clears the wiki then re-ingests; progress via events.
+    void svcClearAndRelearn(kbId).catch(err =>
+      console.error(`[Tlon] clearAndRelearn failed for ${kbId}:`, err)
     )
     return ok(true)
   } catch (e) { return fail(e) }
