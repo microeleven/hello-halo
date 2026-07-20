@@ -66,6 +66,9 @@ export interface HaloAPI {
   cliConfigScanMcp: () => Promise<IpcResponse>
   cliConfigMigrateMcp: (actions: Array<{ name: string; action: 'skip' | 'overwrite' }>) => Promise<IpcResponse>
   cliConfigSetConfigDir: (mode: 'halo' | 'cc' | 'custom', customDir?: string) => Promise<IpcResponse>
+  // Personal memory (what Halo has learned about the user)
+  memoryGetUser: () => Promise<IpcResponse>
+  memoryClearUser: () => Promise<IpcResponse>
 
   // AI Sources CRUD (atomic - backend reads from disk, never overwrites rotating tokens)
   aiSourcesSwitchSource: (sourceId: string) => Promise<IpcResponse>
@@ -660,6 +663,8 @@ const api: HaloAPI = {
   // NOTE: these preload methods PACK positional args into the object shape the
   // main handlers destructure (e.g. (viewId, url) -> { viewId, url }), so they
   // are kept hand-written — bindRpc's positional passthrough would break them.
+  memoryGetUser: () => ipcRenderer.invoke('memory:get-user'),
+  memoryClearUser: () => ipcRenderer.invoke('memory:clear-user'),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),

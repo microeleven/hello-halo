@@ -264,13 +264,22 @@ function sanitizeSlug(slug: string): string {
  *
  * @returns A configured MemoryService instance
  */
+let memoryServiceSingleton: MemoryService | null = null
+
 export async function initMemory(): Promise<MemoryService> {
   const start = performance.now()
 
   const service = createMemoryService()
+  memoryServiceSingleton = service
 
   const duration = performance.now() - start
   console.log(`[Memory] Memory service initialized in ${duration.toFixed(1)}ms`)
 
   return service
+}
+
+/** The initialized MemoryService, for callers outside the app-run lifecycle
+ *  (e.g. the user-memory distiller). Available after initMemory() at startup. */
+export function getMemoryService(): MemoryService | null {
+  return memoryServiceSingleton
 }

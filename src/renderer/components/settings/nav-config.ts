@@ -3,7 +3,7 @@
  * Data-driven navigation items for the settings page
  */
 
-import { Bot, Palette, Settings, Globe, Info, Bell, Store, Code, Heart } from 'lucide-react'
+import { Bot, Palette, Settings, Globe, Info, Bell, Store, Code, Heart, Sparkles } from 'lucide-react'
 import type { SettingsNavItem } from './types'
 
 /**
@@ -30,6 +30,12 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     id: 'appearance',
     labelKey: 'Appearance',
     icon: Palette
+  },
+  {
+    id: 'personal-memory',
+    labelKey: 'What Halo knows about you',
+    icon: Sparkles,
+    desktopOnly: true
   },
   {
     id: 'system',

@@ -22,6 +22,8 @@ import { createAIBrowserMcpServer } from '../ai-browser'
 import { createWebSearchMcpServer } from '../web-search'
 import { createHaloAppsMcpServer } from '../app-bridge'
 import { getKBReferencesForSpace, getKBReferenceById, getKBChatContext } from '../tlon'
+import { getSpace } from '../space.service'
+import { getMemoryService } from '../../platform/memory'
 import type {
   AgentRequest,
   SessionConfig,
@@ -147,6 +149,20 @@ export async function sendMessage(
       knowledgeBases = Array.from(byId.values())
     }
 
+    // Personal memory: what Halo has learned about this user, injected so the
+    // agent "remembers" them across conversations. Best-effort; never blocks.
+    let userMemory: string | undefined
+    try {
+      const mem = getMemoryService()
+      if (mem) {
+        const content = await mem.read(
+          { type: 'user', spaceId, spacePath: getSpace(spaceId)?.path ?? '' },
+          { scope: 'user', mode: 'full' }
+        )
+        if (content && content.trim()) userMemory = content.trim()
+      }
+    } catch { /* memory is best-effort context */ }
+
     // Build base SDK options
     const sdkOptions = buildBaseSdkOptions({
       credentials: resolvedCredentials,
@@ -155,6 +171,7 @@ export async function sendMessage(
       spaceId,
       conversationId,
       knowledgeBases,
+      userMemory,
       stderrHandler: (data: string) => {
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data

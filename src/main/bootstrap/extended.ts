@@ -66,6 +66,7 @@ import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
+import { registerMemoryHandlers } from '../ipc/memory'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
@@ -306,6 +307,9 @@ export function initializeExtendedServices(): void {
 
   // Tlon: knowledge base management IPC handlers
   registerTlonHandlers()
+
+  // Personal memory: read/clear what Halo has learned about the user
+  registerMemoryHandlers()
 
   // Windows-specific: Initialize Git Bash in background
   if (process.platform === 'win32') {

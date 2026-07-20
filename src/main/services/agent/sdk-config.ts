@@ -208,6 +208,8 @@ export interface BaseSdkOptionsParams {
   digitalHumansEnabled?: boolean
   /** Knowledge bases bound to this session's space (Tlon) */
   knowledgeBases?: KBReference[]
+  /** What Halo has learned about the user (personal memory), injected as persona context */
+  userMemory?: string
 }
 
 // ============================================
@@ -648,10 +650,10 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     // When AI Browser is enabled, appends full browser tool workflow guide
     systemPrompt: params.aiBrowserEnabled
       ? buildSystemPromptWithAIBrowser(
-          { workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, aiBrowserEnabled: true, digitalHumansEnabled: params.digitalHumansEnabled, knowledgeBases: params.knowledgeBases },
+          { workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, aiBrowserEnabled: true, digitalHumansEnabled: params.digitalHumansEnabled, knowledgeBases: params.knowledgeBases, userMemory: params.userMemory },
           AI_BROWSER_SYSTEM_PROMPT
         )
-      : buildSystemPrompt({ workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, digitalHumansEnabled: params.digitalHumansEnabled, knowledgeBases: params.knowledgeBases }),
+      : buildSystemPrompt({ workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, digitalHumansEnabled: params.digitalHumansEnabled, knowledgeBases: params.knowledgeBases, userMemory: params.userMemory }),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/

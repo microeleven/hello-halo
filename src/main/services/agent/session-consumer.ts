@@ -39,6 +39,7 @@ import { getConversation } from '../conversation.service'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
 import { resolveSourcesForReadPaths } from '../tlon'
 import type { KBSource } from '../../../shared/types/tlon'
+import { distillUserMemory } from './user-memory-distiller'
 import { createSessionState, consumePendingRebuild } from './session-manager'
 
 // ============================================
@@ -425,6 +426,21 @@ function persistTurnResult(
       sources,
       error: errorThought?.content,
     })
+
+    // Seed of personal memory: silently learn durable facts about the user from
+    // this exchange (fire-and-forget, off the hot path, never affects the turn).
+    // The trigger is the last non-injected user message, so injected/autonomous
+    // turns are skipped.
+    if (finalContent) {
+      try {
+        const conv = getConversation(spaceId, conversationId)
+        const lastUser = [...(conv?.messages ?? [])].reverse()
+          .find(m => m.role === 'user' && m.source !== 'injection')
+        if (lastUser?.content) {
+          void distillUserMemory({ spaceId, userText: lastUser.content, assistantText: finalContent })
+        }
+      } catch { /* never break persistence */ }
+    }
   }
 }
 

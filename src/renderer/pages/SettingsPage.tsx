@@ -18,6 +18,7 @@ import {
   scrollToSection,
   AISourcesSection,
   AppearanceSection,
+  MemorySection,
   SystemSection,
   AdvancedSection,
   RemoteAccessSection,
@@ -103,6 +104,11 @@ export function SettingsPage() {
 
               {/* Appearance Section */}
               <AppearanceSection config={config} setConfig={setConfig} />
+
+              {/* Personal Memory ("What Halo knows about you") - Desktop only */}
+              {!isRemoteMode && (
+                <MemorySection />
+              )}
 
               {/* System Section - Desktop only */}
               {!isRemoteMode && (

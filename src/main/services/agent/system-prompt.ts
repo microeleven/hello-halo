@@ -70,6 +70,8 @@ export interface SystemPromptContext {
   digitalHumansEnabled?: boolean
   /** Knowledge bases bound to this session's space/app (Tlon) */
   knowledgeBases?: KBReference[]
+  /** What Halo has learned about the user across conversations (personal memory) */
+  userMemory?: string
 }
 
 // ============================================
@@ -527,6 +529,16 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     for (const kb of ctx.knowledgeBases) {
       prompt += `## ${kb.name}\n\n${kb.indexContent}\n\n`
     }
+  }
+
+  if (ctx.userMemory) {
+    prompt += '\n\n# About this user\n\n'
+      + 'Halo has learned the following about the person you are helping, across past '
+      + 'conversations. Use it to be genuinely useful to *them* specifically: recall it '
+      + 'naturally, never recite it back or flatter. Understanding them is for helping them '
+      + 'do better — not for telling them what they want to hear. If anything here seems '
+      + 'outdated or wrong, trust what they say now over this.\n\n'
+      + ctx.userMemory + '\n'
   }
 
   return prompt
